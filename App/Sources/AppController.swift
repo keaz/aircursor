@@ -1,4 +1,5 @@
 import AVFoundation
+import GestureEngine
 import HandPoseCore
 import HandTrackingKit
 import MotionFilters
@@ -7,20 +8,19 @@ import PointerControl
 import QuartzOutput
 import SwiftUI
 
-/// Owns the pipeline lifecycle and permission state. In M2 the pipeline is
-/// source → One Euro smoothing → PointerMapper → QuartzOutput behind a debug
-/// flag; the gesture engine joins in M3.
+/// Owns the pipeline lifecycle and permission state. The M3 pipeline:
+/// camera frames → One Euro smoothing of the movement joint → GestureEngine
+/// → PointerMapper → QuartzOutput.
 @MainActor
 @Observable
 final class AppController {
-    /// One Euro tuning for the M2 cursor path: 1 Hz cutoff at rest kills
+    /// One Euro tuning for the movement joint: 1 Hz cutoff at rest kills
     /// jitter; beta lifts the cutoff ~5 Hz per normalized-unit/s of hand
-    /// speed so fast motion stays responsive. Revisit during M3 tuning.
+    /// speed so fast motion stays responsive.
     private static let cursorFilterMinCutoff = 1.0
     private static let cursorFilterBeta = 5.0
     private static let cursorFilterDCutoff = 1.0
 
-    private static let moveDebugDefaultsKey = "debug.alwaysEngagedMove"
     private static let sensitivityDefaultsKey = "sensitivity"
 
     private(set) var cameraStatus: CameraPermission.Status = .notDetermined
@@ -32,30 +32,20 @@ final class AppController {
     private(set) var latestFrame: HandPoseFrame?
     /// Measured delivery rate of hand-pose frames.
     private(set) var framesPerSecond: Double = 0
-
-    /// Temporary M2 debug mode: while tracking, the cursor follows the
-    /// smoothed index-MCP point as if the clutch were always engaged.
-    /// Removed in M3 when the gesture engine takes over.
-    var moveCursorDebugEnabled = UserDefaults.standard.bool(forKey: moveDebugDefaultsKey) {
-        didSet {
-            UserDefaults.standard.set(moveCursorDebugEnabled, forKey: Self.moveDebugDefaultsKey)
-            if !moveCursorDebugEnabled {
-                disengageCursorDrive()
-            }
-        }
-    }
+    /// Engine state and index-pinch metric, for the debug overlay HUD.
+    private(set) var gestureStateLabel = "idle"
+    private(set) var indexPinchMetric: Double?
 
     private var source: CameraHandPoseSource?
     private var consumeTask: Task<Void, Never>?
     private var permissionPolling: Task<Void, Never>?
     private var fpsEstimator = FrameRateEstimator()
 
-    // M2 cursor-drive pipeline stages.
+    // Pipeline stages.
     private let output = QuartzPointerOutput()
+    private var engine = GestureEngine()
     private var mapper: PointerMapper?
-    private var cursorFilter = PointOneEuroFilter()
-    private var previousSmoothedPoint: CGPoint?
-    private var cursorEngaged = false
+    private var movementFilter = PointOneEuroFilter()
 
     var hasAllPermissions: Bool {
         cameraStatus == .granted && accessibilityGranted
@@ -147,8 +137,9 @@ final class AppController {
         isTracking = true
         lastError = nil
         fpsEstimator = FrameRateEstimator()
+        engine = GestureEngine()
         mapper = makeMapper()
-        resetCursorDrive()
+        resetMovementFilter()
 
         consumeTask = Task { [weak self] in
             do {
@@ -164,6 +155,14 @@ final class AppController {
     }
 
     private func stopTracking() {
+        // The safety invariant survives teardown: resetting the engine
+        // mid-drag yields the button-releasing intents; post them before
+        // discarding the pipeline.
+        let releaseIntents = engine.reset()
+        if let timestamp = latestFrame?.timestamp {
+            post(commands(for: releaseIntents, at: timestamp))
+        }
+
         consumeTask?.cancel()
         consumeTask = nil
         source?.stop()
@@ -171,14 +170,21 @@ final class AppController {
         isTracking = false
         latestFrame = nil
         framesPerSecond = 0
+        gestureStateLabel = "idle"
+        indexPinchMetric = nil
         mapper = nil
-        resetCursorDrive()
+        resetMovementFilter()
     }
 
     private func ingest(_ frame: HandPoseFrame) {
         latestFrame = frame
         framesPerSecond = fpsEstimator.record(frame.timestamp)
-        driveCursorDebug(with: frame)
+
+        let intents = engine.consume(smoothingMovementJoint(of: frame))
+        post(commands(for: intents, at: frame.timestamp))
+
+        gestureStateLabel = Self.label(for: engine.state)
+        indexPinchMetric = engine.lastMetrics.index
     }
 
     private func fail(_ error: Error) {
@@ -186,33 +192,22 @@ final class AppController {
         stopTracking()
     }
 
-    // MARK: - M2 debug cursor drive (removed in M3)
+    // MARK: - Pipeline stages
 
-    /// Always-engaged relative movement: smooth the index MCP, feed deltas
-    /// through the mapper, post the resulting moves. Hand loss disengages so
-    /// re-acquisition re-anchors instead of jumping.
-    private func driveCursorDebug(with frame: HandPoseFrame) {
-        guard moveCursorDebugEnabled, isTracking else { return }
+    /// Replaces the movement joint with its One Euro-smoothed position, so
+    /// the engine's moveBy deltas are jitter-free while the raw fingertip
+    /// geometry keeps pinch detection crisp.
+    private func smoothingMovementJoint(of frame: HandPoseFrame) -> HandPoseFrame {
+        guard let point = frame.joints[engine.config.movementJoint] else { return frame }
+        var joints = frame.joints
+        joints[engine.config.movementJoint] = movementFilter.filter(point, at: frame.timestamp)
+        return HandPoseFrame(joints: joints, timestamp: frame.timestamp)
+    }
 
-        guard let indexMCP = frame.joints[.indexMCP] else {
-            disengageCursorDrive(at: frame.timestamp)
-            return
-        }
-
-        let smoothed = cursorFilter.filter(indexMCP, at: frame.timestamp)
-        defer { previousSmoothedPoint = smoothed }
-
-        guard cursorEngaged, let previous = previousSmoothedPoint else {
-            _ = mapper?.commands(for: .engaged, at: frame.timestamp)
-            cursorEngaged = true
-            return
-        }
-
-        let commands = mapper?.commands(
-            for: .moveBy(dx: smoothed.x - previous.x, dy: smoothed.y - previous.y),
-            at: frame.timestamp
-        ) ?? []
-        post(commands)
+    private func commands(
+        for intents: [PointerIntent], at timestamp: TimeInterval
+    ) -> [PointerCommand] {
+        intents.flatMap { mapper?.commands(for: $0, at: timestamp) ?? [] }
     }
 
     private func makeMapper() -> PointerMapper {
@@ -226,21 +221,23 @@ final class AppController {
         )
     }
 
-    private func resetCursorDrive() {
-        cursorFilter = PointOneEuroFilter(
+    private func resetMovementFilter() {
+        movementFilter = PointOneEuroFilter(
             minCutoff: Self.cursorFilterMinCutoff,
             beta: Self.cursorFilterBeta,
             dCutoff: Self.cursorFilterDCutoff
         )
-        previousSmoothedPoint = nil
-        cursorEngaged = false
     }
 
-    private func disengageCursorDrive(at timestamp: TimeInterval? = nil) {
-        if cursorEngaged {
-            _ = mapper?.commands(for: .disengaged, at: timestamp ?? Date.timeIntervalSinceReferenceDate)
+    private static func label(for state: GestureEngine.State) -> String {
+        switch state {
+        case .idle: return "idle"
+        case .tracking: return "tracking"
+        case .pinched(kind: .index, _, _): return "pinched (index)"
+        case .pinched(kind: .middle, _, _): return "pinched (middle)"
+        case .dragging: return "dragging"
+        case .scrolling: return "scrolling"
         }
-        resetCursorDrive()
     }
 
     private func observeDisplayConfigurationChanges() {
@@ -268,7 +265,6 @@ final class AppController {
             }
         } catch {
             lastError = "Pointer output failed: \(String(describing: error))"
-            moveCursorDebugEnabled = false
         }
     }
 }

@@ -49,13 +49,20 @@ struct OverlayView: View {
                 systemImage: handDetected ? "hand.raised.fill" : "hand.raised.slash"
             )
 
-            // Populated in M3 when the gesture engine joins the pipeline.
-            Label("idle", systemImage: "cursorarrow.motionlines")
+            Label(controller.gestureStateLabel, systemImage: "cursorarrow.motionlines")
+
+            Label(pinchMetricText, systemImage: "arrow.down.left.and.arrow.up.right")
+                .monospacedDigit()
                 .foregroundStyle(.secondary)
 
             Spacer()
         }
         .font(.callout)
+    }
+
+    private var pinchMetricText: String {
+        guard let metric = controller.indexPinchMetric else { return "pinch —" }
+        return String(format: "pinch %.2f", metric)
     }
 
     private var handDetected: Bool {

@@ -190,6 +190,26 @@ final class GestureEngineTransitionTests: XCTestCase {
         XCTAssertEqual(harness.intents.clickCount, 0, "a release never observed is not a tap")
     }
 
+    // MARK: - External reset (pipeline teardown)
+
+    func testResetMidDragReleasesTheButtonFirst() {
+        var harness = EngineHarness()
+        harness.feed(indexRatio: 1.0, frames: 3)
+        harness.feed(indexRatio: 0.15, frames: 17)
+        XCTAssertEqual(harness.engine.state, .dragging)
+
+        // Stopping the pipeline mid-drag must obey the same safety invariant
+        // as hand loss.
+        XCTAssertEqual(harness.engine.reset(), [.dragEnded, .disengaged])
+        XCTAssertEqual(harness.engine.state, .idle)
+    }
+
+    func testResetWhileIdleEmitsNothing() {
+        var engine = GestureEngine()
+        XCTAssertEqual(engine.reset(), [])
+        XCTAssertEqual(engine.state, .idle)
+    }
+
     // MARK: - Debug metrics
 
     func testExposesLastPinchMetrics() throws {

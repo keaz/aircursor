@@ -181,6 +181,13 @@ public struct GestureEngine: Sendable {
         }
     }
 
+    /// Tears the engine down to `.idle` immediately (pipeline stopping,
+    /// tracking toggled off). Returns the release intents the safety
+    /// invariant demands — post them before discarding the pipeline.
+    public mutating func reset() -> [PointerIntent] {
+        transitionToIdle()
+    }
+
     // MARK: - Degraded frames and the safety invariant
 
     private var isMiddlePinchActive: Bool {
