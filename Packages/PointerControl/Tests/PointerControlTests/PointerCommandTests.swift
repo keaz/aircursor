@@ -2,9 +2,7 @@ import GestureEngine
 import PointerControl
 import XCTest
 
-final class PointerControlPlaceholderTests: XCTestCase {
-    // M2 replaces this with tests for the clutch anchor, gain curve, and
-    // display-bounds clamping.
+final class PointerCommandTests: XCTestCase {
     func testCommandEquality() {
         XCTAssertEqual(
             PointerCommand.move(to: CGPoint(x: 10, y: 20)),
