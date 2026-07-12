@@ -1,21 +1,24 @@
 import SwiftUI
 
-@main
-struct AirCursorApp: App {
-    var body: some Scene {
-        MenuBarExtra("AirCursor", systemImage: "hand.point.up.left") {
-            MenuView()
-        }
-    }
+enum WindowID {
+    static let debugOverlay = "debug-overlay"
 }
 
-struct MenuView: View {
-    var body: some View {
-        Text("AirCursor")
-        Divider()
-        Button("Quit AirCursor") {
-            NSApp.terminate(nil)
+@main
+struct AirCursorApp: App {
+    @State private var controller = AppController()
+
+    var body: some Scene {
+        MenuBarExtra {
+            MenuView(controller: controller)
+        } label: {
+            Image(systemName: controller.menuBarSystemImage)
         }
-        .keyboardShortcut("q")
+        .menuBarExtraStyle(.window)
+
+        Window("AirCursor Debug", id: WindowID.debugOverlay) {
+            OverlayView(controller: controller)
+        }
+        .defaultSize(width: 500, height: 480)
     }
 }
