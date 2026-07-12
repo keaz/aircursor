@@ -1,0 +1,47 @@
+name: AirCursor
+
+options:
+  bundleIdPrefix: com.kasunranasinghe
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  HandTrackingKit:
+    path: Packages/HandTrackingKit
+  MotionFilters:
+    path: Packages/MotionFilters
+  GestureEngine:
+    path: Packages/GestureEngine
+  PointerControl:
+    path: Packages/PointerControl
+  QuartzOutput:
+    path: Packages/QuartzOutput
+
+targets:
+  AirCursor:
+    type: application
+    platform: macOS
+    sources:
+      - App/Sources
+    dependencies:
+      - package: HandTrackingKit
+        product: HandPoseCore
+      - package: HandTrackingKit
+        product: HandTrackingKit
+      - package: MotionFilters
+      - package: GestureEngine
+      - package: PointerControl
+      - package: QuartzOutput
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kasunranasinghe.AirCursor
+        INFOPLIST_FILE: App/Resources/Info.plist
+        GENERATE_INFOPLIST_FILE: false
+        SWIFT_VERSION: "5.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        # Ad-hoc signing keeps local builds working without a team. Set your
+        # DEVELOPMENT_TEAM for a stable identity so TCC permission grants
+        # (camera, accessibility) survive rebuilds.
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
