@@ -1,10 +1,18 @@
 import ApplicationServices
+import GestureEngine
 import PointerControl
 
 /// CGEvent-posting implementation of `PointerOutput` — the only place in the
 /// system that synthesizes OS input events, and the swap point for a future
 /// DriverKit implementation. Keep this package tiny.
-public struct QuartzPointerOutput: PointerOutput {
+///
+/// A class because correct event types are stateful: moves while a button is
+/// held must post as `.leftMouseDragged`/`.rightMouseDragged`, so the output
+/// remembers which button it pressed. State is lock-guarded.
+public final class QuartzPointerOutput: PointerOutput, @unchecked Sendable {
+    private let lock = NSLock()
+    private var heldButton: PointerButton?
+
     public init() {}
 
     /// Whether this process is trusted for Accessibility, which posting
@@ -31,25 +39,57 @@ public struct QuartzPointerOutput: PointerOutput {
     }
 
     public func apply(_ command: PointerCommand) throws {
+        try makeEvent(for: command).post(tap: .cghidEventTap)
+    }
+
+    /// Builds the CGEvent for a command and updates the held-button state.
+    /// Split from `apply` so tests exercise construction without posting.
+    func makeEvent(for command: PointerCommand) throws -> CGEvent {
+        lock.lock()
+        defer { lock.unlock() }
+
         switch command {
         case .move(let point):
-            try post(mouseType: .mouseMoved, at: point)
-        case .buttonDown, .buttonUp, .scroll:
-            // Buttons arrive in M3, scroll in M4.
+            let type: CGEventType
+            switch heldButton {
+            case .left: type = .leftMouseDragged
+            case .right: type = .rightMouseDragged
+            case nil: type = .mouseMoved
+            }
+            return try Self.mouseEvent(type: type, at: point, button: heldButton ?? .left)
+
+        case .buttonDown(let button, let point):
+            heldButton = button
+            let type: CGEventType = button == .left ? .leftMouseDown : .rightMouseDown
+            let event = try Self.mouseEvent(type: type, at: point, button: button)
+            event.setIntegerValueField(.mouseEventClickState, value: 1)
+            return event
+
+        case .buttonUp(let button, let point):
+            heldButton = nil
+            let type: CGEventType = button == .left ? .leftMouseUp : .rightMouseUp
+            let event = try Self.mouseEvent(type: type, at: point, button: button)
+            event.setIntegerValueField(.mouseEventClickState, value: 1)
+            return event
+
+        case .scroll:
+            // Wired in M4 with momentum phases.
             throw QuartzOutputError.unsupportedCommand(command)
         }
     }
 
-    private func post(mouseType: CGEventType, at point: CGPoint) throws {
+    private static func mouseEvent(
+        type: CGEventType, at point: CGPoint, button: PointerButton
+    ) throws -> CGEvent {
         guard let event = CGEvent(
             mouseEventSource: nil,
-            mouseType: mouseType,
+            mouseType: type,
             mouseCursorPosition: point,
-            mouseButton: .left
+            mouseButton: button == .left ? .left : .right
         ) else {
             throw QuartzOutputError.eventCreationFailed
         }
-        event.post(tap: .cghidEventTap)
+        return event
     }
 }
 
