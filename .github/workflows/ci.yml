@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  package-tests:
+    name: ${{ matrix.package }}
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - HandTrackingKit
+          - MotionFilters
+          - GestureEngine
+          - PointerControl
+          - QuartzOutput
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: swift build --package-path Packages/${{ matrix.package }}
+      - name: Test
+        run: swift test --package-path Packages/${{ matrix.package }}
