@@ -36,6 +36,17 @@ struct MenuView: View {
             )
             .toggleStyle(.switch)
 
+            // Temporary M2 debug mode; the gesture engine replaces it in M3.
+            Toggle(
+                "Move cursor (M2 debug)",
+                isOn: Binding(
+                    get: { controller.moveCursorDebugEnabled },
+                    set: { controller.moveCursorDebugEnabled = $0 }
+                )
+            )
+            .toggleStyle(.checkbox)
+            .help("Always-engaged mode: the cursor follows your hand while tracking runs.")
+
             if let error = controller.lastError {
                 Text(error)
                     .font(.caption)
