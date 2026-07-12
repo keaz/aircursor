@@ -62,13 +62,17 @@ final class FixtureGenerationTests: XCTestCase {
         return builder.frames
     }
 
-    /// Pinch, then move far and long enough to promote to a drag, then the
-    /// hand vanishes mid-drag. Expected in M3: dragEnded is emitted before
-    /// the engine goes idle — a stuck drag must be impossible.
+    /// Pinch, hold still past tapDuration so the drag arms (button down),
+    /// drag for half a second, then the hand vanishes mid-drag. Expected in
+    /// M3: dragEnded is emitted before the engine goes idle — a stuck drag
+    /// must be impossible.
     private func handLossMidDrag() -> [HandPoseFrame] {
         var builder = FrameSequenceBuilder()
         appendRamp(&builder, from: openRatio, to: openRatio, frames: 10)
         appendRamp(&builder, from: openRatio, to: closedRatio, frames: 6)
+        // Still hold: 20 frames ≈ 333 ms, comfortably past the 250 ms
+        // tapDuration, promoting the pinch to a drag.
+        appendRamp(&builder, from: closedRatio, to: closedRatio, frames: 20)
         for i in 0..<30 {
             let center = CGPoint(x: 0.5 + Double(i) * 0.005, y: 0.55 - Double(i) * 0.003)
             builder.append(joints: SyntheticHand.joints(center: center, thumbIndexRatio: closedRatio))
