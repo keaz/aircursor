@@ -83,8 +83,24 @@ public struct PointerMapper: Sendable {
             virtualPosition = position
             return [.move(to: position)]
 
-        case .click, .dragBegan, .dragEnded, .scrollBy:
-            // Wired in M3 (buttons) and M4 (scroll).
+        case .click(let button):
+            // A right tap arrives without engagement; press wherever the
+            // cursor actually is.
+            let position = virtualPosition ?? currentPointerLocation()
+            return [.buttonDown(button, at: position), .buttonUp(button, at: position)]
+
+        case .dragBegan:
+            let position = virtualPosition ?? currentPointerLocation()
+            return [.buttonDown(.left, at: position)]
+
+        case .dragEnded:
+            // Defensive fallback: a dragEnded must always release the button,
+            // even if intent ordering were ever violated upstream.
+            let position = virtualPosition ?? currentPointerLocation()
+            return [.buttonUp(.left, at: position)]
+
+        case .scrollBy:
+            // Wired in M4 with momentum phases.
             return []
         }
     }
