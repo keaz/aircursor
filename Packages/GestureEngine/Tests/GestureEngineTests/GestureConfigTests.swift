@@ -2,9 +2,7 @@ import GestureEngine
 import HandPoseCore
 import XCTest
 
-final class GestureEnginePlaceholderTests: XCTestCase {
-    // M3 replaces this with fixture-driven tests asserting emitted intent
-    // sequences (e.g. pinch_tap.json → [engaged, click(.left), disengaged]).
+final class GestureConfigTests: XCTestCase {
     func testDefaultConfigMatchesSpec() {
         let config = GestureConfig()
         XCTAssertEqual(config.tapDuration, 0.25)
@@ -13,9 +11,11 @@ final class GestureEnginePlaceholderTests: XCTestCase {
             config.pinchOpenThreshold, config.pinchCloseThreshold,
             "Hysteresis requires open > close"
         )
+        XCTAssertEqual(config.movementJoint, .indexMCP)
+        XCTAssertEqual(config.trackingLossGrace, 0.1)
     }
 
-    func testEngineStartsIdle() {
+    func testEngineStartsIdleAndIgnoresEmptyFrames() {
         var engine = GestureEngine()
         let intents = engine.consume(HandPoseFrame(joints: [:], timestamp: 0))
         XCTAssertEqual(engine.state, .idle)
