@@ -5,20 +5,25 @@ import GestureEngine
 /// All pointer-mapping tunables. `sensitivity` is the user-facing setting;
 /// the rest are calibration constants with sane defaults.
 public struct PointerConfig: Equatable, Sendable {
-    /// User setting; scales every delta.
+    /// User setting; scales every pointer-movement delta.
     public var sensitivity: Double
     /// Base scale: screen points traveled per normalized hand-space unit at
     /// gain 1.
     public var pointsPerNormalizedUnit: Double
+    /// Scroll scale: pixels of scroll per normalized hand-space unit.
+    /// Deltas keep hand-space sign; QuartzOutput owns wheel conventions.
+    public var scrollPointsPerNormalizedUnit: Double
     public var velocityCurve: VelocityGainCurve
 
     public init(
         sensitivity: Double = 1.0,
         pointsPerNormalizedUnit: Double = 2000,
+        scrollPointsPerNormalizedUnit: Double = 2500,
         velocityCurve: VelocityGainCurve = VelocityGainCurve()
     ) {
         self.sensitivity = sensitivity
         self.pointsPerNormalizedUnit = pointsPerNormalizedUnit
+        self.scrollPointsPerNormalizedUnit = scrollPointsPerNormalizedUnit
         self.velocityCurve = velocityCurve
     }
 }
@@ -38,6 +43,9 @@ public struct PointerMapper: Sendable {
     /// Accumulated position while engaged; nil while disengaged.
     private var virtualPosition: CGPoint?
     private var lastEventTimestamp: TimeInterval?
+    /// Whether a scroll-wheel phase sequence is open (began emitted, no
+    /// ended yet).
+    private var scrollInProgress = false
 
     public var isEngaged: Bool { virtualPosition != nil }
 
@@ -99,9 +107,16 @@ public struct PointerMapper: Sendable {
             let position = virtualPosition ?? currentPointerLocation()
             return [.buttonUp(.left, at: position)]
 
-        case .scrollBy:
-            // Wired in M4 with momentum phases.
-            return []
+        case .scrollBy(let dx, let dy):
+            let phase: ScrollPhase = scrollInProgress ? .changed : .began
+            scrollInProgress = true
+            let scale = config.scrollPointsPerNormalizedUnit
+            return [.scroll(dx: dx * scale, dy: dy * scale, phase: phase)]
+
+        case .scrollEnded:
+            guard scrollInProgress else { return [] }
+            scrollInProgress = false
+            return [.scroll(dx: 0, dy: 0, phase: .ended)]
         }
     }
 

@@ -257,8 +257,53 @@ final class PointerMapperTests: XCTestCase {
 
     // MARK: - Scroll (M4)
 
-    func testScrollIsUnhandledUntilM4() {
+    private func scrollCommand(_ commands: [PointerCommand]) -> (dx: Double, dy: Double, phase: ScrollPhase)? {
+        guard case .scroll(let dx, let dy, let phase)? = commands.first, commands.count == 1 else {
+            return nil
+        }
+        return (dx, dy, phase)
+    }
+
+    func testScrollSequencePhasesBeganChangedEnded() throws {
         var mapper = makeLinearMapper()
-        XCTAssertEqual(mapper.commands(for: .scrollBy(dx: 0, dy: 1), at: 0), [])
+
+        let first = try XCTUnwrap(scrollCommand(mapper.commands(for: .scrollBy(dx: 0, dy: -0.01), at: 0)))
+        XCTAssertEqual(first.phase, .began)
+
+        let second = try XCTUnwrap(scrollCommand(mapper.commands(for: .scrollBy(dx: 0, dy: -0.01), at: dt)))
+        XCTAssertEqual(second.phase, .changed)
+
+        let third = try XCTUnwrap(scrollCommand(mapper.commands(for: .scrollBy(dx: 0.002, dy: -0.01), at: 2 * dt)))
+        XCTAssertEqual(third.phase, .changed)
+
+        let ended = try XCTUnwrap(scrollCommand(mapper.commands(for: .scrollEnded, at: 3 * dt)))
+        XCTAssertEqual(ended.phase, .ended)
+        XCTAssertEqual(ended.dx, 0)
+        XCTAssertEqual(ended.dy, 0)
+
+        // A fresh sequence begins again.
+        let restarted = try XCTUnwrap(scrollCommand(mapper.commands(for: .scrollBy(dx: 0, dy: 0.01), at: 4 * dt)))
+        XCTAssertEqual(restarted.phase, .began)
+    }
+
+    func testScrollDeltasScaleByScrollPointsPerUnit() throws {
+        var config = PointerConfig()
+        config.scrollPointsPerNormalizedUnit = 3000
+        config.velocityCurve = VelocityGainCurve(maxGain: 1, halfSpeed: 1)
+        let stub = LocationStub(CGPoint(x: 0, y: 0))
+        var mapper = PointerMapper(
+            config: config,
+            displayBounds: [mainDisplay],
+            currentPointerLocation: { stub.next() }
+        )
+
+        let scroll = try XCTUnwrap(scrollCommand(mapper.commands(for: .scrollBy(dx: 0.002, dy: -0.01), at: 0)))
+        XCTAssertEqual(scroll.dx, 0.002 * 3000, accuracy: 1e-9)
+        XCTAssertEqual(scroll.dy, -0.01 * 3000, accuracy: 1e-9)
+    }
+
+    func testScrollEndedWithoutActiveSequenceEmitsNothing() {
+        var mapper = makeLinearMapper()
+        XCTAssertEqual(mapper.commands(for: .scrollEnded, at: 0), [])
     }
 }
