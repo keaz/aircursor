@@ -34,7 +34,7 @@ final class GestureEngineTransitionTests: XCTestCase {
 
         let moved = harness.feed(
             fingers: .init(index: true, middle: true, ring: true, little: true),
-            center: CGPoint(x: 0.6, y: 0.5)
+            center: CGPoint(x: 0.53, y: 0.54) // below the swipe threshold
         )
         XCTAssertEqual(moved, [], "open palm must not move the cursor")
     }

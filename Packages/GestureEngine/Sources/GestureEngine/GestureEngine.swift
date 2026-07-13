@@ -60,6 +60,13 @@ public struct GestureEngine: Sendable {
     private var zoomNextStepRatio = 0.0
     private var zoomExitStreak = 0
 
+    // System gesture detectors and their suppression window (blooms must
+    // not fire while the hand is flung open to release something).
+    private var swipeTracker = SwipeTracker()
+    private var bloomTracker = BloomTracker()
+    private var bloomSuppressedUntil: TimeInterval = -.infinity
+    private var palmDropoutStreak = 0
+
     public init(config: GestureConfig = GestureConfig()) {
         self.config = config
         self.classifier = PoseClassifier(config: config)
@@ -81,6 +88,7 @@ public struct GestureEngine: Sendable {
         defer { lastMovementPoint = movementPoint }
 
         var intents: [PointerIntent] = []
+        let previousState = state
         let target = targetState(for: snapshot)
         let transitioned = target != state
         if transitioned {
@@ -93,6 +101,43 @@ public struct GestureEngine: Sendable {
             at: frame.timestamp,
             suppressMotion: transitioned
         )
+
+        // Releasing a button or leaving zoom usually flings the hand open;
+        // hold blooms back for a beat.
+        let released = intents.contains {
+            if case .released = $0 { return true }
+            return false
+        }
+        if released || (previousState == .zooming && state != .zooming) {
+            bloomSuppressedUntil = frame.timestamp + config.bloomSuppressAfterGesture
+        }
+
+        if let wrist = frame.joints[.wrist] {
+            if config.missionControlEnabled,
+               let action = bloomTracker.update(
+                   extendedCount: snapshot.fingers.extendedCount,
+                   wrist: wrist,
+                   at: frame.timestamp,
+                   suppressedUntil: bloomSuppressedUntil,
+                   config: config
+               ) {
+                intents.append(.system(action))
+            }
+            if state == .palm {
+                palmDropoutStreak = 0
+                if config.swipesEnabled,
+                   let action = swipeTracker.update(wrist: wrist, at: frame.timestamp, config: config) {
+                    intents.append(.system(action))
+                }
+            } else {
+                // Strokes blur fingers out of the palm pose briefly; only a
+                // sustained departure resets the stroke window.
+                palmDropoutStreak += 1
+                if palmDropoutStreak >= config.swipePoseDropoutFrames {
+                    swipeTracker.reset()
+                }
+            }
+        }
         return intents
     }
 
@@ -327,5 +372,8 @@ public struct GestureEngine: Sendable {
         scrollTravel = 0
         scrollCommitted = false
         zoomExitStreak = 0
+        swipeTracker.reset()
+        bloomTracker.reset()
+        bloomSuppressedUntil = -.infinity
     }
 }

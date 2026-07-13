@@ -51,6 +51,14 @@ public struct GestureConfig: Equatable, Sendable {
     public var swipeMaxDuration: TimeInterval
     /// Ignore further swipes (and stroke returns) for this long after one.
     public var swipeCooldown: TimeInterval
+    /// Fast strokes blur fingers below the extension gates for a frame or
+    /// two; the swipe tracker survives this many consecutive non-palm
+    /// frames before resetting.
+    public var swipePoseDropoutFrames: Int
+    /// A stroke's |dy| must stay under |dx| × this ratio. Real strokes are
+    /// flat (measured ≤ 0.39) while diagonal wind-ups reach 0.69 — the
+    /// wind-up before a flick must not fire the opposite swipe.
+    public var swipeMaxVerticalRatio: Double
     /// Fist → four extended fingers within this window is a bloom
     /// (calibrated: real blooms complete within ~1 frame).
     public var bloomWindow: TimeInterval
@@ -58,6 +66,10 @@ public struct GestureConfig: Equatable, Sendable {
     public var bloomMaxWristDrift: Double
     /// Ignore further blooms for this long after one fires.
     public var bloomCooldown: TimeInterval
+    /// Blooms are suppressed this long after a button release or a zoom
+    /// exit — flinging the hand open to let go must not fire Mission
+    /// Control.
+    public var bloomSuppressAfterGesture: TimeInterval
 
     // MARK: Movement and tracking loss
 
@@ -92,9 +104,12 @@ public struct GestureConfig: Equatable, Sendable {
         swipeMinDisplacement: Double = 0.09,
         swipeMaxDuration: TimeInterval = 0.35,
         swipeCooldown: TimeInterval = 0.6,
+        swipePoseDropoutFrames: Int = 3,
+        swipeMaxVerticalRatio: Double = 0.5,
         bloomWindow: TimeInterval = 0.13,
         bloomMaxWristDrift: Double = 0.05,
         bloomCooldown: TimeInterval = 1.0,
+        bloomSuppressAfterGesture: TimeInterval = 0.3,
         movementJoint: HandJoint = .indexMCP,
         trackingLossGrace: TimeInterval = 0.1,
         leftButtonEnabled: Bool = true,
@@ -117,9 +132,12 @@ public struct GestureConfig: Equatable, Sendable {
         self.swipeMinDisplacement = swipeMinDisplacement
         self.swipeMaxDuration = swipeMaxDuration
         self.swipeCooldown = swipeCooldown
+        self.swipePoseDropoutFrames = swipePoseDropoutFrames
+        self.swipeMaxVerticalRatio = swipeMaxVerticalRatio
         self.bloomWindow = bloomWindow
         self.bloomMaxWristDrift = bloomMaxWristDrift
         self.bloomCooldown = bloomCooldown
+        self.bloomSuppressAfterGesture = bloomSuppressAfterGesture
         self.movementJoint = movementJoint
         self.trackingLossGrace = trackingLossGrace
         self.leftButtonEnabled = leftButtonEnabled
