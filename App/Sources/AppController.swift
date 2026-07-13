@@ -35,6 +35,11 @@ final class AppController {
     /// The recording hit its frame cap (`FrameRecorder.maxFrames`).
     private(set) var recordingReachedLimit = false
     private let recorder = FrameRecorder()
+    /// The recorder's session token for the active recording. Set only after
+    /// the awaited `beginRecording()` completes, so frames feed and count
+    /// only against a session whose buffer has been cleared. `nil` while no
+    /// recording is armed.
+    private var recordingSession: Int?
 
     /// Newest frame, for the debug overlay's landmark dots.
     private(set) var latestFrame: HandPoseFrame?
@@ -221,10 +226,12 @@ final class AppController {
         latestFrame = frame
         framesPerSecond = fpsEstimator.record(frame.timestamp)
 
-        if isRecordingFixture {
-            // The recorder's count is authoritative; a frame that arrives
-            // before beginRecording lands returns 0 and is not miscounted.
-            let result = await recorder.record(frame)
+        // Frames are fed only once the recorder has acknowledged begin (the
+        // session token is set), so nothing is recorded before the buffer is
+        // armed and cleared.
+        if isRecordingFixture, let session = recordingSession {
+            let result = await recorder.record(frame, session: session)
+            guard result.accepted else { return } // stale session; ignore
             recordedFrameCount = result.frameCount
             if result.reachedLimit {
                 recordingReachedLimit = true
@@ -309,10 +316,25 @@ final class AppController {
         if isRecordingFixture {
             finishRecording()
         } else {
-            recordedFrameCount = 0
-            recordingReachedLimit = false
-            isRecordingFixture = true
-            Task { await recorder.beginRecording() }
+            startRecording()
+        }
+    }
+
+    private func startRecording() {
+        isRecordingFixture = true
+        recordedFrameCount = 0
+        recordingReachedLimit = false
+        recordingSession = nil
+        Task { @MainActor [weak self] in
+            let token = await self?.recorder.beginRecording()
+            guard let self, let token else { return }
+            // If tracking stopped or the user toggled off while begin was in
+            // flight, retire this session immediately.
+            guard self.isRecordingFixture else {
+                await self.recorder.cancelRecording(session: token)
+                return
+            }
+            self.recordingSession = token
         }
     }
 
@@ -323,11 +345,25 @@ final class AppController {
         isRecordingFixture = false
         recordedFrameCount = 0
         recordingReachedLimit = false
-        Task { await recorder.cancelRecording() }
+        let session = recordingSession
+        recordingSession = nil
+        if let session {
+            Task { await recorder.cancelRecording(session: session) }
+        }
+        // If begin was still in flight (session == nil), startRecording's
+        // guard cancels the session once it lands.
     }
 
     private func finishRecording() {
         isRecordingFixture = false
+        let session = recordingSession
+        recordingSession = nil
+        guard let session else {
+            // Begin never completed — nothing was recorded.
+            recordedFrameCount = 0
+            recordingReachedLimit = false
+            return
+        }
         Task { @MainActor [weak self] in
             guard let self else { return }
 
@@ -338,11 +374,11 @@ final class AppController {
             NSApplication.shared.activate()
 
             guard panel.runModal() == .OK, let url = panel.url else {
-                await self.recorder.cancelRecording()
+                await self.recorder.cancelRecording(session: session)
                 return
             }
             do {
-                let written = try await self.recorder.endRecording(writingTo: url)
+                let written = try await self.recorder.endRecording(session: session, writingTo: url)
                 self.recordedFrameCount = written
             } catch {
                 self.lastError = "Could not save fixture: \(String(describing: error))"

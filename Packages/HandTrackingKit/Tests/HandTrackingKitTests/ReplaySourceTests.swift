@@ -84,11 +84,11 @@ final class ReplaySourceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
 
         let recorder = FrameRecorder()
-        await recorder.beginRecording()
+        let session = await recorder.beginRecording()
         for frame in frames {
-            await recorder.record(frame)
+            await recorder.record(frame, session: session)
         }
-        try await recorder.endRecording(writingTo: url)
+        try await recorder.endRecording(session: session, writingTo: url)
 
         let source = try ReplaySource(contentsOf: url, speed: 1000)
         try await source.start()
