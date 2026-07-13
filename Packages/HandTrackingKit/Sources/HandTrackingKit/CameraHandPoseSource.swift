@@ -32,13 +32,39 @@ public final class CameraHandPoseSource: NSObject, HandPoseSource, @unchecked Se
     private let minimumJointConfidence: Float
     private let targetFrameRate: Double
     private let handPoseRequest: VNDetectHumanHandPoseRequest
+    private let requestAuthorization: @Sendable () async -> Bool
     private var configured = false
+
+    /// Explicit lifecycle, confined to `sessionQueue`. `stop()` is terminal
+    /// for a source instance — once stopped, the session can never start.
+    private enum Lifecycle {
+        case idle, running, stopped
+    }
+    private var lifecycle: Lifecycle = .idle
+    /// Test hook (sessionQueue-confined): how many times the capture session
+    /// was actually told to start. A stop-before-start race must keep this 0.
+    private(set) var sessionStartCount = 0
 
     public var frames: AsyncStream<HandPoseFrame> { stream }
 
-    public init(minimumJointConfidence: Float = 0.3, targetFrameRate: Double = 60) {
+    public convenience init(minimumJointConfidence: Float = 0.3, targetFrameRate: Double = 60) {
+        self.init(
+            minimumJointConfidence: minimumJointConfidence,
+            targetFrameRate: targetFrameRate,
+            requestAuthorization: { await CameraPermission.requestAccess() }
+        )
+    }
+
+    /// The authorization step is injectable so the stop/start race is
+    /// deterministically testable without a real camera prompt.
+    init(
+        minimumJointConfidence: Float,
+        targetFrameRate: Double,
+        requestAuthorization: @escaping @Sendable () async -> Bool
+    ) {
         self.minimumJointConfidence = minimumJointConfidence
         self.targetFrameRate = targetFrameRate
+        self.requestAuthorization = requestAuthorization
         let request = VNDetectHumanHandPoseRequest()
         request.maximumHandCount = 1
         self.handPoseRequest = request
@@ -49,14 +75,24 @@ public final class CameraHandPoseSource: NSObject, HandPoseSource, @unchecked Se
     }
 
     public func start() async throws {
-        guard await CameraPermission.requestAccess() else {
+        guard await requestAuthorization() else {
             throw HandTrackingError.cameraPermissionDenied
         }
+        // Tracking may have been turned off while we awaited authorization.
+        try Task.checkCancellation()
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             sessionQueue.async {
+                // stop() may have run while authorization was in flight; on a
+                // serial queue its block ran first, so this sees .stopped.
+                guard self.lifecycle == .idle else {
+                    cont.resume(throwing: CancellationError())
+                    return
+                }
                 do {
                     try self.configureIfNeeded()
                     self.captureSession.startRunning()
+                    self.sessionStartCount += 1
+                    self.lifecycle = .running
                     cont.resume()
                 } catch {
                     cont.resume(throwing: error)
@@ -67,7 +103,11 @@ public final class CameraHandPoseSource: NSObject, HandPoseSource, @unchecked Se
 
     public func stop() {
         sessionQueue.async {
-            self.captureSession.stopRunning()
+            let wasRunning = self.lifecycle == .running
+            self.lifecycle = .stopped
+            if wasRunning {
+                self.captureSession.stopRunning()
+            }
             self.continuation.finish()
         }
     }

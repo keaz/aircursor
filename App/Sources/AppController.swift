@@ -154,8 +154,13 @@ final class AppController {
                     guard let self, !Task.isCancelled else { break }
                     await self.ingest(frame)
                 }
+            } catch is CancellationError {
+                // Tracking was turned off during startup; nothing to report.
             } catch {
-                self?.fail(error)
+                // Only the current source's task may surface an error — a
+                // stale generation must not disturb a fresh session.
+                guard let self, !Task.isCancelled, self.source === source else { return }
+                self.fail(error)
             }
         }
     }
