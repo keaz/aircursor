@@ -74,10 +74,10 @@ On first run, grant the two permissions the onboarding flow asks for:
 2. **Accessibility** — required to move the pointer (System Settings →
    Privacy & Security → Accessibility).
 
-Tip: set `DEVELOPMENT_TEAM` in `project.yml` (or Xcode signing settings) so
-the app's code-signing identity is stable and macOS remembers permission
-grants across rebuilds; with ad-hoc signing you may need to re-grant after
-each rebuild.
+Signing is pinned in `project.yml` (`DEVELOPMENT_TEAM` + Apple Development
+identity) so the code signature — and therefore macOS's memory of your
+permission grants — stays stable across rebuilds. Building on a different
+machine? Change `DEVELOPMENT_TEAM` to your own team ID first.
 
 ## Packages
 
@@ -108,10 +108,13 @@ The Xcode project is generated — edit `project.yml`, never the `.xcodeproj`.
 
 ## Troubleshooting
 
-- **Cursor doesn't move, but landmarks track** — Accessibility permission is
-  missing or was invalidated by a rebuild (ad-hoc signing changes the code
-  signature). Remove and re-add AirCursor in System Settings → Privacy &
-  Security → Accessibility, or set `DEVELOPMENT_TEAM` for a stable identity.
+- **Permissions look granted but nothing works** (onboarding checklist never
+  clears, camera never starts) — macOS keys permission grants to the app's
+  code signature; if the signature changed since you granted (different
+  team, ad-hoc builds), System Settings shows stale toggles the system no
+  longer honors. Reset this app's entries and re-grant:
+  `tccutil reset Camera com.kasunranasinghe.AirCursor && tccutil reset
+  Accessibility com.kasunranasinghe.AirCursor`, then relaunch.
 - **Choppy tracking** — most built-in cameras top out at 30 fps; the overlay
   shows the real rate. Good, even lighting improves Vision's confidence.
 - **Gestures trigger accidentally** — lower the tap duration, or disable

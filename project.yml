@@ -40,8 +40,10 @@ targets:
         GENERATE_INFOPLIST_FILE: false
         SWIFT_VERSION: "5.0"
         SWIFT_STRICT_CONCURRENCY: complete
-        # Ad-hoc signing keeps local builds working without a team. Set your
-        # DEVELOPMENT_TEAM for a stable identity so TCC permission grants
-        # (camera, accessibility) survive rebuilds.
+        # Pinned to the local Apple Development identity: TCC permission
+        # grants (camera, accessibility) are keyed to the code-signing
+        # requirement, so an unstable identity silently invalidates them on
+        # every rebuild.
         CODE_SIGN_STYLE: Automatic
-        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_IDENTITY: "Apple Development"
+        DEVELOPMENT_TEAM: GVD3N5A668
