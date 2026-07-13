@@ -13,3 +13,6 @@ xcuserdata/
 
 # macOS
 .DS_Store
+
+# Raw gesture videos stay local — the repo carries landmark JSON only
+docs/gesture recording/
