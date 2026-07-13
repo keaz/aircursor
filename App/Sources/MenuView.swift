@@ -29,6 +29,7 @@ struct MenuView: View {
                 Spacer()
 
                 Button("Quit") {
+                    controller.shutdown() // release held input before quitting
                     NSApp.terminate(nil)
                 }
                 .keyboardShortcut("q")

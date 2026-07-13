@@ -74,6 +74,30 @@ final class AppController {
         startPermissionPolling()
         observeDisplayConfigurationChanges()
         observeSettingsChanges()
+        observeAppTermination()
+    }
+
+    /// Idempotent teardown for app termination. Releases any held input
+    /// (button-up, scroll-ended, disengage) before stopping the camera and
+    /// tasks — the same teardown safety invariant the engine enforces, so
+    /// quitting mid-drag or mid-scroll can never strand the interaction.
+    /// Safe to call more than once and whether or not tracking is active.
+    func shutdown() {
+        stopTracking()
+    }
+
+    /// Any normal termination path releases held input, not just the menu's
+    /// Quit button.
+    private func observeAppTermination() {
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            // willTerminate is delivered synchronously on the main thread, so
+            // the release events post before the process exits.
+            MainActor.assumeIsolated { self?.shutdown() }
+        }
     }
 
     // MARK: - Permissions
