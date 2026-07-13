@@ -25,6 +25,12 @@ public struct GestureConfig: Equatable, Sendable {
     /// before declaring the hand lost and going idle.
     public var trackingLossGrace: TimeInterval
 
+    /// Finger counts as extended when dist(tip, wrist)/dist(pip, wrist)
+    /// rises above this (calibrated: extended reads 1.3–1.5 on real hands).
+    public var fingerExtendThreshold: Double
+    /// ...and retracts when the ratio falls below this (curled reads 0.4–0.8).
+    public var fingerRetractThreshold: Double
+
     /// Per-gesture enable toggles (settings-controlled). Clutch movement is
     /// the core interaction and is always on.
     public var clickEnabled: Bool
@@ -39,6 +45,8 @@ public struct GestureConfig: Equatable, Sendable {
         tapMovement: Double = 0.02,
         movementJoint: HandJoint = .indexMCP,
         trackingLossGrace: TimeInterval = 0.1,
+        fingerExtendThreshold: Double = 1.15,
+        fingerRetractThreshold: Double = 0.95,
         clickEnabled: Bool = true,
         dragEnabled: Bool = true,
         rightClickEnabled: Bool = true,
@@ -50,6 +58,8 @@ public struct GestureConfig: Equatable, Sendable {
         self.tapMovement = tapMovement
         self.movementJoint = movementJoint
         self.trackingLossGrace = trackingLossGrace
+        self.fingerExtendThreshold = fingerExtendThreshold
+        self.fingerRetractThreshold = fingerRetractThreshold
         self.clickEnabled = clickEnabled
         self.dragEnabled = dragEnabled
         self.rightClickEnabled = rightClickEnabled
