@@ -28,9 +28,12 @@ final class GestureEngineTransitionTests: XCTestCase {
 
     func testOpenPalmFreezesTheCursor() {
         var harness = EngineHarness()
-        harness.point(frames: 2)
-        harness.feed(fingers: .init(index: true, middle: true, ring: true, little: true))
-        XCTAssertEqual(harness.intents.last, .disengaged)
+        harness.point(frames: 3)
+        // Open palm takes a couple of frames to debounce in; once it does the
+        // clutch disengages.
+        harness.feed(fingers: .init(index: true, middle: true, ring: true, little: true), frames: 3)
+        XCTAssertTrue(harness.intents.contains(.disengaged))
+        XCTAssertEqual(harness.engine.state, .palm)
 
         let moved = harness.feed(
             fingers: .init(index: true, middle: true, ring: true, little: true),
@@ -241,8 +244,9 @@ final class GestureEngineTransitionTests: XCTestCase {
 
     func testBriefDropoutInsideGraceKeepsThePress() {
         var harness = EngineHarness()
-        harness.point(frames: 2)
-        harness.feed(fingers: .init(index: true), indexPinch: 0.2)
+        harness.point(frames: 3)
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2, frames: 4) // establish the press
+        XCTAssertEqual(harness.engine.state, .pressed(.left))
         harness.feedLost(frames: 2) // ~66 ms < 100 ms grace
         XCTAssertEqual(harness.intents.releaseCount(), 0)
         harness.feed(fingers: .init(index: true), indexPinch: 0.2)
@@ -251,8 +255,8 @@ final class GestureEngineTransitionTests: XCTestCase {
 
     func testLossBeyondGraceReleasesButtonThenDisengages() {
         var harness = EngineHarness()
-        harness.point(frames: 2)
-        harness.feed(fingers: .init(index: true), indexPinch: 0.2)
+        harness.point(frames: 3)
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2, frames: 4) // establish the press
         let lost = harness.feedLost(frames: 6) // 200 ms > grace
         XCTAssertEqual(lost, [.released(.left), .disengaged])
         XCTAssertEqual(harness.engine.state, .idle)

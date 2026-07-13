@@ -12,6 +12,12 @@ public struct GestureConfig: Equatable, Sendable {
     public var pinchCloseThreshold: Double
     /// ...and opens above this (> close, for hysteresis).
     public var pinchOpenThreshold: Double
+    /// A pinch only *arms* a press/zoom after the metric has risen above
+    /// this — the hand must clearly open before it can pinch, like a button
+    /// coming up before it goes down. This rejects a mis-tracked or resting
+    /// hand that sits at a low metric without ever opening. Set to 0 to
+    /// disable (any pinch arms).
+    public var pinchArmThreshold: Double
 
     // MARK: Finger extension (tip–wrist over pip–wrist)
 
@@ -30,6 +36,31 @@ public struct GestureConfig: Equatable, Sendable {
     public var tapMovement: Double
     /// Visits shorter than this are classifier blips, never taps.
     public var tapMinimumDuration: TimeInterval
+
+    // MARK: Pose debounce (start slow, end fast)
+
+    /// Consecutive frames an *active* pose (pinched, scroll) must persist
+    /// before it starts a gesture — rejects 1–2 frame noise spikes.
+    public var poseAdoptFrames: Int
+    /// Consecutive frames a *calm* pose (point, neutral, palm) must persist
+    /// before it ends a gesture. Kept below `poseAdoptFrames` so gestures
+    /// end at least as fast as they start — the anti-stuck bias.
+    public var poseReleaseFrames: Int
+
+    // MARK: Watchdogs (guarantee a gesture can always end)
+
+    /// Zoom's primary escape hatch: if the pinch metric stops moving for
+    /// this long (no spread, no return stroke), the zoom ends. Set above a
+    /// normal spread-and-hold (~0.9s) so it only fires when zoom is truly
+    /// abandoned, not mid-gesture.
+    public var zoomIdleTimeout: TimeInterval
+    /// Hard backstop: a press held longer than this is force-released, so a
+    /// mis-tracked sustained "pinch" can never stick the button down.
+    public var maxPressDuration: TimeInterval
+    /// Minimum pinch-metric change per frame that counts as zoom activity.
+    /// A spread (rising) or a return stroke (falling) both move the metric;
+    /// a hand held closed and still does not — so it times out.
+    public var zoomActivityEpsilon: Double
 
     // MARK: Zoom ratchet (pinch armed from Neutral)
 
@@ -92,12 +123,21 @@ public struct GestureConfig: Equatable, Sendable {
 
     public init(
         pinchCloseThreshold: Double = 0.35,
-        pinchOpenThreshold: Double = 0.55,
+        // Eager release: a press ends on a small separation (0.45) rather
+        // than requiring the thumb and index to pull far apart. Widens the
+        // gap that a relaxed hand can sit in without holding the button.
+        pinchOpenThreshold: Double = 0.45,
+        pinchArmThreshold: Double = 0.6,
         fingerExtendThreshold: Double = 1.15,
         fingerRetractThreshold: Double = 0.95,
         tapDuration: TimeInterval = 0.25,
         tapMovement: Double = 0.02,
         tapMinimumDuration: TimeInterval = 0.05,
+        poseAdoptFrames: Int = 3,
+        poseReleaseFrames: Int = 2,
+        zoomIdleTimeout: TimeInterval = 1.2,
+        maxPressDuration: TimeInterval = 8.0,
+        zoomActivityEpsilon: Double = 0.04,
         zoomSpreadStart: Double = 1.0,
         zoomStepInterval: Double = 0.15,
         zoomExitPoseFrames: Int = 3,
@@ -121,11 +161,17 @@ public struct GestureConfig: Equatable, Sendable {
     ) {
         self.pinchCloseThreshold = pinchCloseThreshold
         self.pinchOpenThreshold = pinchOpenThreshold
+        self.pinchArmThreshold = pinchArmThreshold
         self.fingerExtendThreshold = fingerExtendThreshold
         self.fingerRetractThreshold = fingerRetractThreshold
         self.tapDuration = tapDuration
         self.tapMovement = tapMovement
         self.tapMinimumDuration = tapMinimumDuration
+        self.poseAdoptFrames = poseAdoptFrames
+        self.poseReleaseFrames = poseReleaseFrames
+        self.zoomIdleTimeout = zoomIdleTimeout
+        self.maxPressDuration = maxPressDuration
+        self.zoomActivityEpsilon = zoomActivityEpsilon
         self.zoomSpreadStart = zoomSpreadStart
         self.zoomStepInterval = zoomStepInterval
         self.zoomExitPoseFrames = zoomExitPoseFrames

@@ -44,9 +44,15 @@ The gesture vocabulary is an invisible trackpad, built from hand *poses*
 
 Behaviors worth knowing:
 
+- **Clicks arm on opening.** A pinch only clicks if your hand *clearly
+  opened first* (a real open→close), so a resting or mis-tracked hand that
+  sits half-closed never fires a click. Open your hand between clicks.
 - **Clicks only arm from pointing.** A pinch formed from a relaxed hand
   arms *zoom* instead — that separation is what makes scroll returns and
   zoom spreads unable to phantom-click.
+- **Gestures can't get stuck.** Every gesture ends on eager evidence (a
+  small separation ends a click) and is backed by watchdog timeouts, so a
+  press or zoom can never hang if tracking degrades.
 - **Leaving zoom**: flash an open palm (or the two-finger pose), or drop
   your hand. Pointing alone deliberately does not exit zoom — a wide
   spread looks exactly like pointing to the camera.

@@ -47,6 +47,7 @@ public struct GestureEngine: Sendable {
     public private(set) var lastSnapshot: PoseSnapshot?
 
     private var classifier: PoseClassifier
+    private var poseDebouncer = PoseDebouncer()
     private var lastMovementPoint: CGPoint?
     private var lastGoodTimestamp: TimeInterval?
 
@@ -59,6 +60,18 @@ public struct GestureEngine: Sendable {
     // Zoom ratchet bookkeeping.
     private var zoomNextStepRatio = 0.0
     private var zoomExitStreak = 0
+
+    // Watchdogs and the re-arm block that keeps a force-ended pinch gesture
+    // from instantly re-triggering off the same sustained (mis-tracked)
+    // pinch.
+    private var pressEntryTime: TimeInterval = 0
+    private var lastZoomActivityTime: TimeInterval = 0
+    private var lastZoomMetric: Double = .nan
+    private var pinchActionBlocked = false
+    /// A press/zoom can only start once the hand has clearly opened (the
+    /// pinch metric rose above the arm threshold) since the last one — the
+    /// closure edge that separates a deliberate pinch from a standing one.
+    private var pinchArmed = false
 
     // System gesture detectors and their suppression window (blooms must
     // not fire while the hand is flung open to release something).
@@ -87,12 +100,30 @@ public struct GestureEngine: Sendable {
         }
         defer { lastMovementPoint = movementPoint }
 
+        // Debounce the pose before the state machine reacts: active poses
+        // must persist to start a gesture, calm poses end one quickly.
+        let stablePose = poseDebouncer.update(
+            snapshot.pose,
+            adoptFrames: config.poseAdoptFrames,
+            releaseFrames: config.poseReleaseFrames
+        )
+        // The re-arm block lifts as soon as the pinch has clearly opened.
+        if stablePose != .pinched {
+            pinchActionBlocked = false
+        }
+        // Arm a press/zoom once the hand has clearly opened (a real closure
+        // edge). A hand that never opens — mis-tracked or resting at a low
+        // metric — never arms, so it cannot start a phantom click.
+        if snapshot.indexPinchMetric > config.pinchArmThreshold {
+            pinchArmed = true
+        }
+
         var intents: [PointerIntent] = []
         let previousState = state
-        let target = targetState(for: snapshot)
+        let target = watchdogOverride(at: frame.timestamp) ?? targetState(for: stablePose)
         let transitioned = target != state
         if transitioned {
-            intents += transition(to: target, at: frame.timestamp, movementPoint: movementPoint, exitPose: snapshot.pose)
+            intents += transition(to: target, at: frame.timestamp, movementPoint: movementPoint, exitPose: stablePose)
         }
         intents += tick(
             snapshot: snapshot,
@@ -153,15 +184,34 @@ public struct GestureEngine: Sendable {
 
     // MARK: - Target state resolution
 
-    private mutating func targetState(for snapshot: PoseSnapshot) -> State {
+    /// Watchdog-forced ends that guarantee a gesture can always terminate,
+    /// independent of the pose signal. Returns a forced target, or nil to
+    /// let the pose decide.
+    private mutating func watchdogOverride(at timestamp: TimeInterval) -> State? {
+        switch state {
+        case .zooming where timestamp - lastZoomActivityTime > config.zoomIdleTimeout:
+            // Spreading stopped: zoom is done. Block re-arm off the same
+            // still-closed pinch until it opens.
+            pinchActionBlocked = true
+            return .neutral
+        case .pressed where timestamp - pressEntryTime > config.maxPressDuration:
+            // A press this long is almost certainly mis-tracked; let go.
+            pinchActionBlocked = true
+            return .pointing
+        default:
+            return nil
+        }
+    }
+
+    private mutating func targetState(for pose: HandPose) -> State {
         // Zoom exits only through UNAMBIGUOUS poses. A wide spread reads as
         // Point (the index extends) and its re-close reads as pinch — the
         // recordings prove pose+motion heuristics cannot separate them from
         // real pointing/clicking, so point/pinch/neutral never leave zoom.
         // The user releases zoom by flashing an open palm or the two-finger
-        // pose (or dropping the hand).
+        // pose (or dropping the hand) — or the idle-timeout watchdog fires.
         if state == .zooming {
-            switch snapshot.pose {
+            switch pose {
             case .pinched, .neutral, .point:
                 zoomExitStreak = 0
                 return .zooming
@@ -173,7 +223,7 @@ public struct GestureEngine: Sendable {
             }
         }
 
-        switch snapshot.pose {
+        switch pose {
         case .point:
             return .pointing
         case .scroll:
@@ -183,13 +233,14 @@ public struct GestureEngine: Sendable {
         case .neutral:
             return .neutral
         case .pinched:
+            let pinchAllowed = pinchArmed && !pinchActionBlocked
             switch state {
             case .pointing:
-                return config.leftButtonEnabled ? .pressed(.left) : .pointing
+                return config.leftButtonEnabled && pinchAllowed ? .pressed(.left) : .pointing
             case .pressed:
                 return state
             case .neutral:
-                return config.zoomEnabled ? .zooming : .neutral
+                return config.zoomEnabled && pinchAllowed ? .zooming : .neutral
             case .scrolling:
                 // Return-phase noise: relaxed fingers brush the thumb.
                 return .scrolling
@@ -231,6 +282,8 @@ public struct GestureEngine: Sendable {
         // 3. Enter the new state.
         switch target {
         case .pressed(let button):
+            pressEntryTime = timestamp
+            pinchArmed = false // consumed; must re-open to click again
             intents.append(.pressed(button))
         case .scrolling:
             scrollEntryTime = timestamp
@@ -240,6 +293,9 @@ public struct GestureEngine: Sendable {
         case .zooming:
             zoomNextStepRatio = config.zoomSpreadStart + config.zoomStepInterval
             zoomExitStreak = 0
+            lastZoomActivityTime = timestamp
+            lastZoomMetric = .nan
+            pinchArmed = false
         case .idle, .neutral, .pointing, .palm:
             break
         }
@@ -316,14 +372,25 @@ public struct GestureEngine: Sendable {
         case .zooming:
             var intents: [PointerIntent] = []
             let metric = snapshot.indexPinchMetric
+            var stepped = false
             while metric >= zoomNextStepRatio {
                 intents.append(.system(.zoomStepIn))
                 zoomNextStepRatio += config.zoomStepInterval
+                stepped = true
             }
             if metric < config.pinchCloseThreshold {
                 // Re-closed: re-arm the ratchet for the next spread stroke.
                 zoomNextStepRatio = config.zoomSpreadStart + config.zoomStepInterval
             }
+            // Activity = the metric is moving (spread rising or return stroke
+            // falling) or a step fired. A hand held closed and still moves
+            // the metric barely at all → the idle-timeout watchdog ends zoom.
+            let moved = lastZoomMetric.isFinite
+                && abs(metric - lastZoomMetric) > config.zoomActivityEpsilon
+            if stepped || moved {
+                lastZoomActivityTime = timestamp
+            }
+            lastZoomMetric = metric
             return intents
         }
     }
@@ -372,6 +439,9 @@ public struct GestureEngine: Sendable {
         scrollTravel = 0
         scrollCommitted = false
         zoomExitStreak = 0
+        poseDebouncer.reset()
+        pinchActionBlocked = false
+        pinchArmed = false
         swipeTracker.reset()
         bloomTracker.reset()
         bloomSuppressedUntil = -.infinity
