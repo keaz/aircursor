@@ -111,9 +111,9 @@ final class SystemGestureTests: XCTestCase {
 
     func testBloomRightAfterButtonReleaseIsSuppressed() {
         var harness = EngineHarness()
-        harness.point(frames: 2)
-        harness.feed(fingers: .init(index: true), indexPinch: 0.2, frames: 2) // pressed
-        harness.fist(frames: 1)  // release into fist
+        harness.point(frames: 3)
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2, frames: 4) // pressed
+        harness.fist(frames: 2)  // release into fist
         harness.feed(fingers: palm, frames: 1) // fling the hand open
         XCTAssertEqual(
             harness.intents.systemCount(.missionControl), 0,

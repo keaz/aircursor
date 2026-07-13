@@ -11,7 +11,7 @@ final class GestureEngineTransitionTests: XCTestCase {
     func testPointingEngagesMovesAndNeutralDisengages() {
         var harness = EngineHarness()
         harness.fist(frames: 2)
-        harness.point(frames: 1)
+        harness.point(frames: 2) // calm pose debounces in over poseReleaseFrames
         XCTAssertEqual(harness.intents, [.engaged])
 
         let batch = harness.point(center: CGPoint(x: 0.52, y: 0.54))
@@ -21,7 +21,7 @@ final class GestureEngineTransitionTests: XCTestCase {
         XCTAssertEqual(dx, 0.02, accuracy: 1e-9)
         XCTAssertEqual(dy, -0.01, accuracy: 1e-9)
 
-        harness.fist(frames: 1)
+        harness.fist(frames: 2)
         XCTAssertEqual(harness.intents.last, .disengaged)
         XCTAssertEqual(harness.engine.state, .neutral)
     }
@@ -47,18 +47,21 @@ final class GestureEngineTransitionTests: XCTestCase {
     func testPinchFromPointPressesAndReleasesLeft() {
         var harness = EngineHarness()
         harness.point(frames: 2)
-        harness.feed(fingers: .init(index: true), indexPinch: 0.2)
+        XCTAssertEqual(harness.intents, [.engaged])
+        // The pinch adopts over poseAdoptFrames before it presses.
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2, frames: 3)
         XCTAssertEqual(harness.intents, [.engaged, .pressed(.left)])
 
-        harness.feed(fingers: .init(index: true), indexPinch: 0.8)
+        // Separate past the open threshold for poseReleaseFrames to end it.
+        harness.feed(fingers: .init(index: true), indexPinch: 0.8, frames: 2)
         XCTAssertEqual(harness.intents, [.engaged, .pressed(.left), .released(.left)])
         XCTAssertEqual(harness.engine.state, .pointing, "release back to point keeps the clutch")
     }
 
-    func testPinchDragMovesWhilePressed() {
+    func testPinchDragMovesWhilePressed() throws {
         var harness = EngineHarness()
-        harness.point(frames: 2)
-        harness.feed(fingers: .init(index: true), indexPinch: 0.2)
+        harness.point(frames: 3) // arm + establish pointing
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2, frames: 4) // press
         for i in 1...5 {
             harness.feed(
                 fingers: .init(index: true),
@@ -66,12 +69,21 @@ final class GestureEngineTransitionTests: XCTestCase {
                 center: CGPoint(x: 0.5 + Double(i) * 0.01, y: 0.55)
             )
         }
-        harness.fist(frames: 1)
+        // Enough calm frames to clear the release debounce (poseReleaseFrames).
+        harness.fist(frames: 3)
 
         XCTAssertEqual(harness.intents.pressCount(.left), 1)
         XCTAssertGreaterThanOrEqual(harness.intents.moveCount, 5, "drag moves flow while pressed")
-        let releaseIndex = harness.intents.firstIndex(of: .released(.left))!
-        let disengageIndex = harness.intents.firstIndex(of: .disengaged)!
+        // Guarded so a regression reports the emitted intents instead of a
+        // fatal nil-unwrap that aborts the whole test process.
+        let releaseIndex = try XCTUnwrap(
+            harness.intents.firstIndex(of: .released(.left)),
+            "expected a button-up; got \(harness.intents)"
+        )
+        let disengageIndex = try XCTUnwrap(
+            harness.intents.firstIndex(of: .disengaged),
+            "expected a disengage; got \(harness.intents)"
+        )
         XCTAssertLessThan(releaseIndex, disengageIndex, "button up before clutch release")
     }
 
@@ -87,7 +99,7 @@ final class GestureEngineTransitionTests: XCTestCase {
     func testZoomSpreadStepsAndRearmsOnReclose() {
         var harness = EngineHarness()
         harness.fist(frames: 3)
-        harness.feed(fingers: .init(), indexPinch: 0.2, frames: 2) // arm
+        harness.feed(fingers: .init(), indexPinch: 0.2, frames: 3) // adopt the pinch → arm zoom
         harness.feed(fingers: .init(), indexPinch: 1.2)            // spread past 1.15
         XCTAssertEqual(harness.intents.systemCount(.zoomStepIn), 1)
 
@@ -106,9 +118,11 @@ final class GestureEngineTransitionTests: XCTestCase {
         // leaves zoom, no matter how long or how far it moves.
         var harness = EngineHarness()
         harness.fist(frames: 3)
-        harness.feed(fingers: .init(), indexPinch: 0.2, frames: 2)
+        harness.feed(fingers: .init(), indexPinch: 0.2, frames: 3) // adopt the pinch → zoom
         XCTAssertEqual(harness.engine.state, .zooming)
 
+        // 10 frames (~0.33s) is well under the zoom idle-timeout, so pointing
+        // does not exit zoom here.
         for i in 1...10 {
             harness.point(center: CGPoint(x: 0.5 + Double(i) * 0.03, y: 0.55))
         }
@@ -120,27 +134,30 @@ final class GestureEngineTransitionTests: XCTestCase {
     func testSustainedOpenPalmExitsZoomAndClickingWorksAgain() {
         var harness = EngineHarness()
         harness.fist(frames: 3)
-        harness.feed(fingers: .init(), indexPinch: 0.2, frames: 2)
+        harness.feed(fingers: .init(), indexPinch: 0.2, frames: 3)
         XCTAssertEqual(harness.engine.state, .zooming)
 
+        // Exiting zoom via palm clears both the pose debounce and the
+        // zoom-exit streak, so feed a sustained palm.
         harness.feed(
             fingers: .init(index: true, middle: true, ring: true, little: true),
-            frames: 3
+            frames: 5
         )
-        XCTAssertEqual(harness.engine.state, .palm, "an open palm releases zoom")
+        XCTAssertEqual(harness.engine.state, .palm, "a sustained open palm releases zoom")
 
-        harness.point(frames: 2)
-        harness.feed(fingers: .init(index: true), indexPinch: 0.2)
+        harness.point(frames: 3)
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2, frames: 3)
         XCTAssertEqual(harness.intents.pressCount(.left), 1, "pinch-from-point presses again")
     }
 
     // MARK: - Scroll and two-finger tap
 
-    func testScrollEmitsAfterDeadZoneAndEndsOnExit() {
+    func testScrollEmitsAfterDeadZoneAndEndsOnExit() throws {
         var harness = EngineHarness()
         harness.point(frames: 2)
-        // Two-finger pose, moving upward each frame well past the dead zone.
-        for i in 0...6 {
+        // Two-finger pose adopts over poseAdoptFrames, then moves upward each
+        // frame well past the dead zone.
+        for i in 0...9 {
             harness.feed(
                 fingers: .init(index: true, middle: true),
                 center: CGPoint(x: 0.5, y: 0.55 - Double(i) * 0.01)
@@ -153,19 +170,19 @@ final class GestureEngineTransitionTests: XCTestCase {
         }
         XCTAssertTrue(upScrolls)
 
-        harness.point(frames: 1)
+        harness.point(frames: 2) // exit the scroll pose
         XCTAssertEqual(harness.intents.last, .engaged)
         XCTAssertEqual(harness.intents.count(of: .scrollEnded), 1)
-        let endIndex = harness.intents.firstIndex(of: .scrollEnded)!
-        let engageIndex = harness.intents.lastIndex(of: .engaged)!
+        let endIndex = try XCTUnwrap(harness.intents.firstIndex(of: .scrollEnded))
+        let engageIndex = try XCTUnwrap(harness.intents.lastIndex(of: .engaged))
         XCTAssertLessThan(endIndex, engageIndex, "scroll phase closes before re-engaging")
     }
 
     func testTwoFingerTapRightClicks() {
         var harness = EngineHarness()
         harness.point(frames: 3)
-        harness.feed(fingers: .init(index: true, middle: true), frames: 3) // ~100 ms still
-        harness.point(frames: 1)
+        harness.feed(fingers: .init(index: true, middle: true), frames: 4) // adopt scroll + brief still hold
+        harness.point(frames: 2) // exit to point → the two-finger tap resolves
 
         XCTAssertEqual(harness.intents.pressCount(.right), 1)
         XCTAssertEqual(harness.intents.releaseCount(.right), 1)
@@ -278,7 +295,8 @@ final class GestureEngineTransitionTests: XCTestCase {
     func testResetMidPressReleasesFirst() {
         var harness = EngineHarness()
         harness.point(frames: 2)
-        harness.feed(fingers: .init(index: true), indexPinch: 0.2)
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2, frames: 4) // establish the press
+        XCTAssertEqual(harness.engine.state, .pressed(.left))
         XCTAssertEqual(harness.engine.reset(), [.released(.left), .disengaged])
         XCTAssertEqual(harness.engine.state, .idle)
     }

@@ -65,8 +65,8 @@ final class PoseClassifierTests: XCTestCase {
 
     func testPinchHysteresisHoldsInsideBand() throws {
         _ = classify(fingers: .init(index: true), indexPinch: 0.2)
-        let inBand = try XCTUnwrap(classify(fingers: .init(index: true), indexPinch: 0.45))
-        XCTAssertEqual(inBand.pose, .pinched, "0.45 is inside the 0.35/0.55 band")
+        let inBand = try XCTUnwrap(classify(fingers: .init(index: true), indexPinch: 0.40))
+        XCTAssertEqual(inBand.pose, .pinched, "0.40 is inside the 0.35/0.45 hysteresis band")
         let released = try XCTUnwrap(classify(fingers: .init(index: true), indexPinch: 0.6))
         XCTAssertEqual(released.pose, .point)
     }
