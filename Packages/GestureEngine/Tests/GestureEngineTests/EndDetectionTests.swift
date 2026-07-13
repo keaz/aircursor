@@ -149,6 +149,47 @@ final class EndDetectionTests: XCTestCase {
         XCTAssertNotEqual(harness.engine.state, .pressed(.left))
     }
 
+    // MARK: - Stale-press demotion (behavioral, no phantom ID needed)
+
+    func testStaticHeldPressIsDemotedAfterTheStaleWindow() {
+        var harness = EngineHarness()
+        harness.point(frames: 3)
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2, frames: 4) // press
+        XCTAssertEqual(harness.engine.state, .pressed(.left))
+        // Hold the press dead still past the stale window (2s ≈ 60 frames at
+        // 30fps) but under the 8s absolute cap.
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2, frames: 70)
+        XCTAssertEqual(harness.intents.releaseCount(.left), 1, "a static held press is released")
+        XCTAssertNotEqual(harness.engine.state, .pressed(.left))
+    }
+
+    func testMovingDragIsNotDemoted() {
+        var harness = EngineHarness()
+        harness.point(frames: 3)
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2, frames: 4) // press
+        // Keep dragging (moving) well past the stale window.
+        for i in 1...70 {
+            harness.feed(
+                fingers: .init(index: true),
+                indexPinch: 0.2,
+                center: CGPoint(x: 0.5 + Double(i) * 0.003, y: 0.55)
+            )
+        }
+        XCTAssertEqual(harness.engine.state, .pressed(.left), "a moving drag must not be demoted")
+        XCTAssertEqual(harness.intents.releaseCount(.left), 0)
+    }
+
+    func testDemotedPressCannotRePressWithoutReopening() {
+        var harness = EngineHarness()
+        harness.point(frames: 3)
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2, frames: 4)
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2, frames: 70) // demoted
+        let pressesAfterDemotion = harness.intents.pressCount(.left)
+        // Still pinched and still static — must not re-press off the same hold.
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2, frames: 20)
+        XCTAssertEqual(harness.intents.pressCount(.left), pressesAfterDemotion, "no re-press without reopening")
+    }
+
     func testWatchdogReleaseStillObeysTheSafetyInvariant() {
         var config = GestureConfig()
         config.maxPressDuration = 0.3

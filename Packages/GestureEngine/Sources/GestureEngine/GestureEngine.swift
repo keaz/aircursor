@@ -73,6 +73,8 @@ public struct GestureEngine: Sendable {
     private var lastZoomActivityTime: TimeInterval = 0
     private var lastZoomMetric: Double = .nan
     private var pinchActionBlocked = false
+    /// Recent travel of the movement joint, for stale-press demotion.
+    private var movementWindow: MotionWindow
     /// A press/zoom can only start once the hand has clearly opened (the
     /// pinch metric rose above the arm threshold) since the last one — the
     /// closure edge that separates a deliberate pinch from a standing one.
@@ -88,6 +90,7 @@ public struct GestureEngine: Sendable {
     public init(config: GestureConfig = GestureConfig()) {
         self.config = config
         self.classifier = PoseClassifier(config: config)
+        self.movementWindow = MotionWindow(duration: config.stalePressWindow)
     }
 
     /// Consumes one frame and returns the intents it implies, in order.
@@ -104,6 +107,10 @@ public struct GestureEngine: Sendable {
             CGVector(dx: movementPoint.x - $0.x, dy: movementPoint.y - $0.y)
         }
         defer { lastMovementPoint = movementPoint }
+
+        // Track recent movement-joint travel so the watchdog can demote a
+        // press that has gone static.
+        movementWindow.record(movementPoint, at: frame.timestamp)
 
         // Debounce the pose before the state machine reacts: active poses
         // must persist to start a gesture, calm poses end one quickly.
@@ -201,6 +208,12 @@ public struct GestureEngine: Sendable {
             return .neutral
         case .pressed where timestamp - pressEntryTime > config.maxPressDuration:
             // A press this long is almost certainly mis-tracked; let go.
+            pinchActionBlocked = true
+            return .pointing
+        case .pressed where timestamp - pressEntryTime >= config.stalePressWindow
+            && movementWindow.netDisplacement < config.stalePressMinTravel:
+            // Held static for the whole window: a real drag moves and a real
+            // click is brief, so this is a stuck/phantom press — demote it.
             pinchActionBlocked = true
             return .pointing
         default:
@@ -451,6 +464,7 @@ public struct GestureEngine: Sendable {
         poseDebouncer.reset()
         pinchActionBlocked = false
         pinchArmed = false
+        movementWindow.reset()
         swipeTracker.reset()
         bloomTracker.reset()
         bloomSuppressedUntil = -.infinity

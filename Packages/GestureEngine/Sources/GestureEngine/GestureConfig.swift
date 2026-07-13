@@ -57,6 +57,15 @@ public struct GestureConfig: Equatable, Sendable {
     /// Hard backstop: a press held longer than this is force-released, so a
     /// mis-tracked sustained "pinch" can never stick the button down.
     public var maxPressDuration: TimeInterval
+    /// Behavioral demotion: a press whose movement joint travels less than
+    /// `stalePressMinTravel` over a window this long is released. A real drag
+    /// moves and a real click is brief, so only a static held button (the
+    /// signature of a mis-tracked background hand, or an accidental hold)
+    /// trips it. This needs no way to identify the phantom — measurement
+    /// showed no frame-local signal can — only that the press isn't moving.
+    public var stalePressWindow: TimeInterval
+    /// Movement-joint net displacement below which a press counts as static.
+    public var stalePressMinTravel: Double
     /// Minimum pinch-metric change per frame that counts as zoom activity.
     /// A spread (rising) or a return stroke (falling) both move the metric;
     /// a hand held closed and still does not — so it times out.
@@ -137,6 +146,8 @@ public struct GestureConfig: Equatable, Sendable {
         poseReleaseFrames: Int = 2,
         zoomIdleTimeout: TimeInterval = 1.2,
         maxPressDuration: TimeInterval = 8.0,
+        stalePressWindow: TimeInterval = 2.0,
+        stalePressMinTravel: Double = 0.03,
         zoomActivityEpsilon: Double = 0.04,
         zoomSpreadStart: Double = 1.0,
         zoomStepInterval: Double = 0.15,
@@ -171,6 +182,8 @@ public struct GestureConfig: Equatable, Sendable {
         self.poseReleaseFrames = poseReleaseFrames
         self.zoomIdleTimeout = zoomIdleTimeout
         self.maxPressDuration = maxPressDuration
+        self.stalePressWindow = stalePressWindow
+        self.stalePressMinTravel = stalePressMinTravel
         self.zoomActivityEpsilon = zoomActivityEpsilon
         self.zoomSpreadStart = zoomSpreadStart
         self.zoomStepInterval = zoomStepInterval
