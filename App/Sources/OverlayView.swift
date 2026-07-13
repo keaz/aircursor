@@ -40,6 +40,12 @@ struct OverlayView: View {
                     .foregroundStyle(controller.isRecordingFixture ? .red : .secondary)
             }
 
+            if controller.recordingReachedLimit {
+                Text("length limit reached")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
             Spacer()
         }
     }

@@ -58,4 +58,37 @@ final class FrameRecorderTests: XCTestCase {
         let written = try await recorder.endRecording(writingTo: url)
         XCTAssertEqual(written, 0)
     }
+
+    func testRecordReturnsRunningCountSoTheUICanMatchExactly() async throws {
+        let recorder = FrameRecorder()
+        // A frame that arrives before begin is not counted.
+        let early = await recorder.record(frames[0])
+        XCTAssertEqual(early.frameCount, 0)
+
+        await recorder.beginRecording()
+        let first = await recorder.record(frames[0])
+        XCTAssertEqual(first.frameCount, 1)
+        let second = await recorder.record(frames[1])
+        XCTAssertEqual(second.frameCount, 2)
+    }
+
+    func testFrameCapBoundsMemoryAndReportsTheLimit() async throws {
+        let recorder = FrameRecorder(maxFrames: 3)
+        await recorder.beginRecording()
+
+        var results: [FrameRecorder.RecordResult] = []
+        for _ in 0..<10 {
+            results.append(await recorder.record(frames[0]))
+        }
+
+        XCTAssertEqual(results[2].frameCount, 3)
+        XCTAssertTrue(results[2].reachedLimit, "the cap is reported when hit")
+        // Frames past the cap are dropped, so the count never exceeds it.
+        XCTAssertEqual(results.last?.frameCount, 3, "memory is bounded at the cap")
+
+        let url = tempURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let written = try await recorder.endRecording(writingTo: url)
+        XCTAssertEqual(written, 3)
+    }
 }

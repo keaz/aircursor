@@ -29,7 +29,11 @@ final class AppController {
     /// Landmark-fixture recording (debug overlay). Landmarks only, never
     /// camera frames.
     private(set) var isRecordingFixture = false
+    /// Authoritative count mirrored from the recorder, so the UI can never
+    /// claim more frames than are saved.
     private(set) var recordedFrameCount = 0
+    /// The recording hit its frame cap (`FrameRecorder.maxFrames`).
+    private(set) var recordingReachedLimit = false
     private let recorder = FrameRecorder()
 
     /// Newest frame, for the debug overlay's landmark dots.
@@ -190,6 +194,8 @@ final class AppController {
     }
 
     private func stopTracking() {
+        cancelRecordingIfActive()
+
         // The safety invariant survives teardown: resetting the engine
         // mid-drag yields the button-releasing intents; post them before
         // discarding the pipeline.
@@ -216,8 +222,14 @@ final class AppController {
         framesPerSecond = fpsEstimator.record(frame.timestamp)
 
         if isRecordingFixture {
-            await recorder.record(frame)
-            recordedFrameCount += 1
+            // The recorder's count is authoritative; a frame that arrives
+            // before beginRecording lands returns 0 and is not miscounted.
+            let result = await recorder.record(frame)
+            recordedFrameCount = result.frameCount
+            if result.reachedLimit {
+                recordingReachedLimit = true
+                finishRecording() // cap hit → save what we have
+            }
         }
 
         let intents = engine.consume(smoothingMovementJoint(of: frame))
@@ -298,9 +310,20 @@ final class AppController {
             finishRecording()
         } else {
             recordedFrameCount = 0
+            recordingReachedLimit = false
             isRecordingFixture = true
             Task { await recorder.beginRecording() }
         }
+    }
+
+    /// Stopping tracking discards an in-progress recording rather than
+    /// stranding the UI in an active state with no way to save.
+    private func cancelRecordingIfActive() {
+        guard isRecordingFixture else { return }
+        isRecordingFixture = false
+        recordedFrameCount = 0
+        recordingReachedLimit = false
+        Task { await recorder.cancelRecording() }
     }
 
     private func finishRecording() {
