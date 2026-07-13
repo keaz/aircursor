@@ -72,9 +72,34 @@ public final class QuartzPointerOutput: PointerOutput, @unchecked Sendable {
             event.setIntegerValueField(.mouseEventClickState, value: 1)
             return event
 
-        case .scroll:
-            // Wired in M4 with momentum phases.
-            throw QuartzOutputError.unsupportedCommand(command)
+        case .scroll(let dx, let dy, let phase):
+            // Pixel-unit ("continuous") scroll events, phased like a
+            // trackpad gesture so apps apply their smooth/elastic scrolling.
+            // Deltas keep hand-space sign: hand up (dy < 0) scrolls content
+            // toward the document end, matching grab-the-page scrolling.
+            guard let event = CGEvent(
+                scrollWheelEvent2Source: nil,
+                units: .pixel,
+                wheelCount: 2,
+                wheel1: Int32(dy.rounded()),
+                wheel2: Int32(dx.rounded()),
+                wheel3: 0
+            ) else {
+                throw QuartzOutputError.eventCreationFailed
+            }
+            event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Self.scrollPhaseValue(phase))
+            event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 0)
+            return event
+        }
+    }
+
+    /// Raw values of CGScrollPhase: began = 1, changed = 2, ended = 4.
+    private static func scrollPhaseValue(_ phase: ScrollPhase) -> Int64 {
+        switch phase {
+        case .began: return 1
+        case .changed: return 2
+        case .ended: return 4
         }
     }
 
@@ -94,7 +119,6 @@ public final class QuartzPointerOutput: PointerOutput, @unchecked Sendable {
 }
 
 public enum QuartzOutputError: Error, Equatable, Sendable {
-    case unsupportedCommand(PointerCommand)
     case eventCreationFailed
 }
 

@@ -75,12 +75,29 @@ final class QuartzOutputTests: XCTestCase {
         XCTAssertEqual(up.location, point)
     }
 
-    func testScrollIsUnsupportedUntilM4() {
+    func testScrollEventsCarryPixelDeltasAndPhases() throws {
         let output = QuartzPointerOutput()
-        let command = PointerCommand.scroll(dx: 0, dy: 10, phase: .began)
-        XCTAssertThrowsError(try output.apply(command)) { error in
-            XCTAssertEqual(error as? QuartzOutputError, .unsupportedCommand(command))
-        }
+
+        let began = try output.makeEvent(for: .scroll(dx: 4, dy: -12, phase: .began))
+        XCTAssertEqual(began.type, .scrollWheel)
+        XCTAssertEqual(began.getIntegerValueField(.scrollWheelEventIsContinuous), 1, "pixel scrolls are continuous")
+        XCTAssertEqual(began.getIntegerValueField(.scrollWheelEventScrollPhase), 1) // kCGScrollPhaseBegan
+        XCTAssertEqual(began.getIntegerValueField(.scrollWheelEventMomentumPhase), 0)
+        XCTAssertEqual(began.getIntegerValueField(.scrollWheelEventPointDeltaAxis1), -12, "vertical keeps hand-space sign")
+        XCTAssertEqual(began.getIntegerValueField(.scrollWheelEventPointDeltaAxis2), 4)
+
+        let changed = try output.makeEvent(for: .scroll(dx: 0, dy: 6, phase: .changed))
+        XCTAssertEqual(changed.getIntegerValueField(.scrollWheelEventScrollPhase), 2) // kCGScrollPhaseChanged
+
+        let ended = try output.makeEvent(for: .scroll(dx: 0, dy: 0, phase: .ended))
+        XCTAssertEqual(ended.getIntegerValueField(.scrollWheelEventScrollPhase), 4) // kCGScrollPhaseEnded
+        XCTAssertEqual(ended.getIntegerValueField(.scrollWheelEventPointDeltaAxis1), 0)
+    }
+
+    func testScrollDeltasRoundToWholePixels() throws {
+        let output = QuartzPointerOutput()
+        let event = try output.makeEvent(for: .scroll(dx: 0, dy: 7.6, phase: .changed))
+        XCTAssertEqual(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1), 8)
     }
 
     func testCurrentPointerLocationIsFinite() {
