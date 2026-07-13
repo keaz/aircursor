@@ -3,6 +3,7 @@ import Foundation
 /// UserDefaults keys shared by the settings UI and the pipeline controller.
 enum SettingsKeys {
     static let sensitivity = "sensitivity"
+    static let tapDuration = "tapDuration"
     static let leftButtonEnabled = "gesture.leftButton.enabled"
     static let rightButtonEnabled = "gesture.rightButton.enabled"
     static let scrollEnabled = "gesture.scroll.enabled"
@@ -15,6 +16,7 @@ enum SettingsKeys {
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
             sensitivity: 1.0,
+            tapDuration: 0.25, // matches GestureConfig.tapDuration
             leftButtonEnabled: true,
             rightButtonEnabled: true,
             scrollEnabled: true,

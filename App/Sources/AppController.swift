@@ -245,6 +245,7 @@ final class AppController {
         mapper?.config.sensitivity = defaults.double(forKey: SettingsKeys.sensitivity)
 
         var engineConfig = engine.config
+        engineConfig.tapDuration = defaults.double(forKey: SettingsKeys.tapDuration)
         engineConfig.leftButtonEnabled = defaults.bool(forKey: SettingsKeys.leftButtonEnabled)
         engineConfig.rightButtonEnabled = defaults.bool(forKey: SettingsKeys.rightButtonEnabled)
         engineConfig.scrollEnabled = defaults.bool(forKey: SettingsKeys.scrollEnabled)
