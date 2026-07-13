@@ -6,14 +6,35 @@ import PointerControl
 /// system that synthesizes OS input events, and the swap point for a future
 /// DriverKit implementation. Keep this package tiny.
 ///
-/// A class because correct event types are stateful: moves while a button is
-/// held must post as `.leftMouseDragged`/`.rightMouseDragged`, so the output
-/// remembers which button it pressed. State is lock-guarded.
+/// A class because correct events are stateful: moves while a button is held
+/// post as drag events, and rapid same-spot presses escalate clickState so
+/// pinch-pinch double-clicks work. State is lock-guarded.
 public final class QuartzPointerOutput: PointerOutput, @unchecked Sendable {
-    private let lock = NSLock()
-    private var heldButton: PointerButton?
+    /// Same-button presses within this interval and radius coalesce into
+    /// double/triple clicks (matches the macOS default feel).
+    static let doubleClickInterval: TimeInterval = 0.5
+    static let doubleClickRadius: Double = 5.0
 
-    public init() {}
+    private let lock = NSLock()
+    private let now: @Sendable () -> TimeInterval
+    private var heldButton: PointerButton?
+    private var lastPress: (button: PointerButton, at: CGPoint, time: TimeInterval)?
+    private var clickState: Int64 = 1
+
+    public init() {
+        self.now = { CFAbsoluteTimeGetCurrent() }
+    }
+
+    /// Tests inject a controllable clock for click coalescing.
+    init(now: @escaping @Sendable () -> TimeInterval) {
+        self.now = now
+    }
+
+    /// Current pointer position in global display (CG, top-left origin)
+    /// coordinates — the space `PointerCommand` uses. Anchors the clutch.
+    public static func currentPointerLocation() -> CGPoint {
+        CGEvent(source: nil)?.location ?? .zero
+    }
 
     /// Whether this process is trusted for Accessibility, which posting
     /// synthetic events to the HID event tap requires.
@@ -32,19 +53,16 @@ public final class QuartzPointerOutput: PointerOutput, @unchecked Sendable {
         return AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary)
     }
 
-    /// Current pointer position in global display (CG, top-left origin)
-    /// coordinates — the space `PointerCommand` uses. Anchors the clutch.
-    public static func currentPointerLocation() -> CGPoint {
-        CGEvent(source: nil)?.location ?? .zero
-    }
-
     public func apply(_ command: PointerCommand) throws {
-        try makeEvent(for: command).post(tap: .cghidEventTap)
+        for event in try makeEvents(for: command) {
+            event.post(tap: .cghidEventTap)
+        }
     }
 
-    /// Builds the CGEvent for a command and updates the held-button state.
-    /// Split from `apply` so tests exercise construction without posting.
-    func makeEvent(for command: PointerCommand) throws -> CGEvent {
+    /// Builds the CGEvents for a command and updates held-button/click
+    /// state. Split from `apply` so tests exercise construction without
+    /// posting.
+    func makeEvents(for command: PointerCommand) throws -> [CGEvent] {
         lock.lock()
         defer { lock.unlock() }
 
@@ -56,21 +74,32 @@ public final class QuartzPointerOutput: PointerOutput, @unchecked Sendable {
             case .right: type = .rightMouseDragged
             case nil: type = .mouseMoved
             }
-            return try Self.mouseEvent(type: type, at: point, button: heldButton ?? .left)
+            return [try Self.mouseEvent(type: type, at: point, button: heldButton ?? .left)]
 
         case .buttonDown(let button, let point):
             heldButton = button
+            let time = now()
+            if let last = lastPress,
+               last.button == button,
+               time - last.time <= Self.doubleClickInterval,
+               hypot(point.x - last.at.x, point.y - last.at.y) <= Self.doubleClickRadius {
+                clickState += 1
+            } else {
+                clickState = 1
+            }
+            lastPress = (button, point, time)
+
             let type: CGEventType = button == .left ? .leftMouseDown : .rightMouseDown
             let event = try Self.mouseEvent(type: type, at: point, button: button)
-            event.setIntegerValueField(.mouseEventClickState, value: 1)
-            return event
+            event.setIntegerValueField(.mouseEventClickState, value: clickState)
+            return [event]
 
         case .buttonUp(let button, let point):
             heldButton = nil
             let type: CGEventType = button == .left ? .leftMouseUp : .rightMouseUp
             let event = try Self.mouseEvent(type: type, at: point, button: button)
-            event.setIntegerValueField(.mouseEventClickState, value: 1)
-            return event
+            event.setIntegerValueField(.mouseEventClickState, value: clickState)
+            return [event]
 
         case .scroll(let dx, let dy, let phase):
             // Pixel-unit ("continuous") scroll events, phased like a
@@ -90,7 +119,19 @@ public final class QuartzPointerOutput: PointerOutput, @unchecked Sendable {
             event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
             event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Self.scrollPhaseValue(phase))
             event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 0)
-            return event
+            return [event]
+
+        case .system(let action):
+            let (keyCode, flags) = Self.keyChord(for: action)
+            return try [true, false].map { isDown in
+                guard let event = CGEvent(
+                    keyboardEventSource: nil, virtualKey: keyCode, keyDown: isDown
+                ) else {
+                    throw QuartzOutputError.eventCreationFailed
+                }
+                event.flags = flags
+                return event
+            }
         }
     }
 
@@ -100,6 +141,16 @@ public final class QuartzPointerOutput: PointerOutput, @unchecked Sendable {
         case .began: return 1
         case .changed: return 2
         case .ended: return 4
+        }
+    }
+
+    /// System-gesture key chords (virtual key codes from HIToolbox Events.h).
+    private static func keyChord(for action: SystemAction) -> (CGKeyCode, CGEventFlags) {
+        switch action {
+        case .spaceLeft: return (123, .maskControl)      // ctrl+←
+        case .spaceRight: return (124, .maskControl)     // ctrl+→
+        case .missionControl: return (126, .maskControl) // ctrl+↑
+        case .zoomStepIn: return (24, .maskCommand)      // ⌘ and the =/+ key
         }
     }
 
