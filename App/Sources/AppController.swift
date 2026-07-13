@@ -21,12 +21,16 @@ final class AppController {
     private static let cursorFilterBeta = 5.0
     private static let cursorFilterDCutoff = 1.0
 
-    private static let sensitivityDefaultsKey = "sensitivity"
-
     private(set) var cameraStatus: CameraPermission.Status = .notDetermined
     private(set) var accessibilityGranted = false
     private(set) var isTracking = false
     private(set) var lastError: String?
+
+    /// Landmark-fixture recording (debug overlay). Landmarks only, never
+    /// camera frames.
+    private(set) var isRecordingFixture = false
+    private(set) var recordedFrameCount = 0
+    private let recorder = FrameRecorder()
 
     /// Newest frame, for the debug overlay's landmark dots.
     private(set) var latestFrame: HandPoseFrame?
@@ -69,6 +73,7 @@ final class AppController {
         refreshPermissions()
         startPermissionPolling()
         observeDisplayConfigurationChanges()
+        observeSettingsChanges()
     }
 
     // MARK: - Permissions
@@ -140,13 +145,14 @@ final class AppController {
         engine = GestureEngine()
         mapper = makeMapper()
         resetMovementFilter()
+        applyTunables()
 
         consumeTask = Task { [weak self] in
             do {
                 try await source.start()
                 for await frame in source.frames {
                     guard let self, !Task.isCancelled else { break }
-                    self.ingest(frame)
+                    await self.ingest(frame)
                 }
             } catch {
                 self?.fail(error)
@@ -176,9 +182,14 @@ final class AppController {
         resetMovementFilter()
     }
 
-    private func ingest(_ frame: HandPoseFrame) {
+    private func ingest(_ frame: HandPoseFrame) async {
         latestFrame = frame
         framesPerSecond = fpsEstimator.record(frame.timestamp)
+
+        if isRecordingFixture {
+            await recorder.record(frame)
+            recordedFrameCount += 1
+        }
 
         let intents = engine.consume(smoothingMovementJoint(of: frame))
         post(commands(for: intents, at: frame.timestamp))
@@ -211,14 +222,84 @@ final class AppController {
     }
 
     private func makeMapper() -> PointerMapper {
-        let storedSensitivity = UserDefaults.standard.double(forKey: Self.sensitivityDefaultsKey)
         var config = PointerConfig()
-        config.sensitivity = storedSensitivity > 0 ? storedSensitivity : 1.0
+        config.sensitivity = UserDefaults.standard.double(forKey: SettingsKeys.sensitivity)
         return PointerMapper(
             config: config,
             displayBounds: QuartzDisplays.activeDisplayBounds(),
             currentPointerLocation: { QuartzPointerOutput.currentPointerLocation() }
         )
+    }
+
+    // MARK: - Settings
+
+    /// Settings apply immediately: sensitivity flows to the mapper, tap
+    /// duration and the per-gesture enables to the engine.
+    private func applyTunables() {
+        let defaults = UserDefaults.standard
+        mapper?.config.sensitivity = defaults.double(forKey: SettingsKeys.sensitivity)
+
+        var engineConfig = engine.config
+        engineConfig.tapDuration = defaults.double(forKey: SettingsKeys.tapDuration)
+        engineConfig.clickEnabled = defaults.bool(forKey: SettingsKeys.clickEnabled)
+        engineConfig.dragEnabled = defaults.bool(forKey: SettingsKeys.dragEnabled)
+        engineConfig.rightClickEnabled = defaults.bool(forKey: SettingsKeys.rightClickEnabled)
+        engineConfig.scrollEnabled = defaults.bool(forKey: SettingsKeys.scrollEnabled)
+        engine.config = engineConfig
+    }
+
+    private func observeSettingsChanges() {
+        NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.applyTunables()
+            }
+        }
+    }
+
+    // MARK: - Fixture recording (debug overlay)
+
+    func toggleFixtureRecording() {
+        if isRecordingFixture {
+            finishRecording()
+        } else {
+            recordedFrameCount = 0
+            isRecordingFixture = true
+            Task { await recorder.beginRecording() }
+        }
+    }
+
+    private func finishRecording() {
+        isRecordingFixture = false
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            let panel = NSSavePanel()
+            panel.title = "Save Landmark Fixture"
+            panel.allowedContentTypes = [.json]
+            panel.nameFieldStringValue = Self.defaultRecordingName()
+            NSApplication.shared.activate()
+
+            guard panel.runModal() == .OK, let url = panel.url else {
+                await self.recorder.cancelRecording()
+                return
+            }
+            do {
+                let written = try await self.recorder.endRecording(writingTo: url)
+                self.recordedFrameCount = written
+            } catch {
+                self.lastError = "Could not save fixture: \(String(describing: error))"
+            }
+        }
+    }
+
+    private static func defaultRecordingName() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return "recording-\(formatter.string(from: Date())).json"
     }
 
     private func resetMovementFilter() {

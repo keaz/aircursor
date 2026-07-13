@@ -13,9 +13,35 @@ struct OverlayView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
 
             hud
+            recordingControls
         }
         .padding(16)
-        .frame(minWidth: 420, minHeight: 380)
+        .frame(minWidth: 420, minHeight: 400)
+    }
+
+    /// Records landmark fixtures (JSON, landmarks only — never video) for
+    /// threshold tuning and engine tests.
+    private var recordingControls: some View {
+        HStack(spacing: 10) {
+            Button {
+                controller.toggleFixtureRecording()
+            } label: {
+                Label(
+                    controller.isRecordingFixture ? "Stop & Save…" : "Record Fixture",
+                    systemImage: controller.isRecordingFixture ? "stop.circle.fill" : "record.circle"
+                )
+            }
+            .disabled(!controller.isTracking)
+
+            if controller.isRecordingFixture || controller.recordedFrameCount > 0 {
+                Text("\(controller.recordedFrameCount) frames")
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(controller.isRecordingFixture ? .red : .secondary)
+            }
+
+            Spacer()
+        }
     }
 
     @ViewBuilder

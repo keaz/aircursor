@@ -5,9 +5,12 @@ import SwiftUI
 struct MenuView: View {
     let controller: AppController
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            header
+
             if controller.hasAllPermissions {
                 controls
             } else {
@@ -16,13 +19,44 @@ struct MenuView: View {
 
             Divider()
 
-            Button("Quit AirCursor") {
-                NSApp.terminate(nil)
+            HStack {
+                Button("Settings…") {
+                    openSettings()
+                    NSApplication.shared.activate()
+                }
+                .keyboardShortcut(",")
+
+                Spacer()
+
+                Button("Quit") {
+                    NSApp.terminate(nil)
+                }
+                .keyboardShortcut("q")
             }
-            .keyboardShortcut("q")
         }
         .padding(14)
         .frame(width: 320)
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: controller.menuBarSystemImage)
+                .foregroundStyle(.tint)
+            Text("AirCursor")
+                .font(.headline)
+            Spacer()
+            Text(statusText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var statusText: String {
+        if !controller.hasAllPermissions { return "needs permissions" }
+        if controller.isTracking {
+            return String(format: "%.0f fps · %@", controller.framesPerSecond, controller.gestureStateLabel)
+        }
+        return "paused"
     }
 
     private var controls: some View {
@@ -46,6 +80,7 @@ struct MenuView: View {
                 openWindow(id: WindowID.debugOverlay)
                 NSApplication.shared.activate()
             }
+            .keyboardShortcut("d")
         }
     }
 }
