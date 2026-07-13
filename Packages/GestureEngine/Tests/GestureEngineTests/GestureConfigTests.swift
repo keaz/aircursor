@@ -13,6 +13,10 @@ final class GestureConfigTests: XCTestCase {
         )
         XCTAssertEqual(config.movementJoint, .indexMCP)
         XCTAssertEqual(config.trackingLossGrace, 0.1)
+        XCTAssertTrue(config.clickEnabled)
+        XCTAssertTrue(config.dragEnabled)
+        XCTAssertTrue(config.rightClickEnabled)
+        XCTAssertTrue(config.scrollEnabled)
     }
 
     func testEngineStartsIdleAndIgnoresEmptyFrames() {

@@ -25,13 +25,24 @@ public struct GestureConfig: Equatable, Sendable {
     /// before declaring the hand lost and going idle.
     public var trackingLossGrace: TimeInterval
 
+    /// Per-gesture enable toggles (settings-controlled). Clutch movement is
+    /// the core interaction and is always on.
+    public var clickEnabled: Bool
+    public var dragEnabled: Bool
+    public var rightClickEnabled: Bool
+    public var scrollEnabled: Bool
+
     public init(
         pinchCloseThreshold: Double = 0.35,
         pinchOpenThreshold: Double = 0.55,
         tapDuration: TimeInterval = 0.25,
         tapMovement: Double = 0.02,
         movementJoint: HandJoint = .indexMCP,
-        trackingLossGrace: TimeInterval = 0.1
+        trackingLossGrace: TimeInterval = 0.1,
+        clickEnabled: Bool = true,
+        dragEnabled: Bool = true,
+        rightClickEnabled: Bool = true,
+        scrollEnabled: Bool = true
     ) {
         self.pinchCloseThreshold = pinchCloseThreshold
         self.pinchOpenThreshold = pinchOpenThreshold
@@ -39,5 +50,9 @@ public struct GestureConfig: Equatable, Sendable {
         self.tapMovement = tapMovement
         self.movementJoint = movementJoint
         self.trackingLossGrace = trackingLossGrace
+        self.clickEnabled = clickEnabled
+        self.dragEnabled = dragEnabled
+        self.rightClickEnabled = rightClickEnabled
+        self.scrollEnabled = scrollEnabled
     }
 }

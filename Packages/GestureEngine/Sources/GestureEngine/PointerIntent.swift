@@ -15,4 +15,9 @@ public enum PointerIntent: Equatable, Sendable {
     case dragBegan
     case dragEnded
     case scrollBy(dx: Double, dy: Double)
+    /// The scroll pinch released (or tracking was lost): PointerControl
+    /// closes the scroll-wheel phase so apps see a completed gesture.
+    /// Addition to the original v1 contract — without it the mapper cannot
+    /// emit `ScrollPhase.ended` at the right moment.
+    case scrollEnded
 }

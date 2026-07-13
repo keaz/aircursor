@@ -123,6 +123,7 @@ final class GestureEngineTransitionTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(harness.intents.scrollCount, 5)
         XCTAssertEqual(harness.intents.clickCount, 0)
         XCTAssertEqual(harness.intents.count(of: .engaged), 0, "scroll never engages the clutch")
+        XCTAssertEqual(harness.intents.last, .scrollEnded, "release must close the scroll phase")
         XCTAssertEqual(harness.engine.state, .tracking)
 
         let hasUpwardScroll = harness.intents.contains { intent in
@@ -130,6 +131,35 @@ final class GestureEngineTransitionTests: XCTestCase {
             return false
         }
         XCTAssertTrue(hasUpwardScroll)
+    }
+
+    func testHandLossMidScrollEndsTheScrollPhase() {
+        var harness = EngineHarness()
+        harness.feed(indexRatio: 1.0, frames: 3)
+        harness.feed(indexRatio: 1.0, middleRatio: 0.15, frames: 17)
+        XCTAssertEqual(harness.engine.state, .scrolling)
+
+        let lostBatch = harness.feedLost(frames: 10)
+        XCTAssertEqual(lostBatch, [.scrollEnded], "apps need the phase closed on hand loss")
+        XCTAssertEqual(harness.engine.state, .idle)
+    }
+
+    func testResetMidScrollEndsTheScrollPhase() {
+        var harness = EngineHarness()
+        harness.feed(indexRatio: 1.0, frames: 3)
+        harness.feed(indexRatio: 1.0, middleRatio: 0.15, frames: 17)
+        XCTAssertEqual(harness.engine.state, .scrolling)
+        XCTAssertEqual(harness.engine.reset(), [.scrollEnded])
+    }
+
+    func testDisabledRightClickSuppressesMiddleTap() {
+        var config = GestureConfig()
+        config.rightClickEnabled = false
+        var harness = EngineHarness(config: config)
+        harness.feed(indexRatio: 1.0, frames: 3)
+        harness.feed(indexRatio: 1.0, middleRatio: 0.15, frames: 5)
+        harness.feed(indexRatio: 1.0, middleRatio: 1.1, frames: 2)
+        XCTAssertEqual(harness.intents, [])
     }
 
     func testIndexPinchWinsWhenBothPinchesClose() {

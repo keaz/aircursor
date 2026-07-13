@@ -139,9 +139,11 @@ public struct GestureEngine: Sendable {
                 state = .tracking
                 switch kind {
                 case .index:
-                    return isTap ? [.click(.left), .disengaged] : [.disengaged]
+                    return isTap && config.clickEnabled
+                        ? [.click(.left), .disengaged]
+                        : [.disengaged]
                 case .middle:
-                    return isTap ? [.click(.right)] : []
+                    return isTap && config.rightClickEnabled ? [.click(.right)] : []
                 }
             }
 
@@ -151,14 +153,16 @@ public struct GestureEngine: Sendable {
 
             switch kind {
             case .index:
-                if !committedToMove, frame.timestamp - since >= config.tapDuration {
+                if config.dragEnabled, !committedToMove,
+                   frame.timestamp - since >= config.tapDuration {
                     state = .dragging
                     return [.dragBegan]
                 }
                 return moveIntents(for: delta)
 
             case .middle:
-                if committedToMove || frame.timestamp - since >= config.tapDuration {
+                if config.scrollEnabled,
+                   committedToMove || frame.timestamp - since >= config.tapDuration {
                     state = .scrolling
                     return scrollIntents(for: delta)
                 }
@@ -175,7 +179,7 @@ public struct GestureEngine: Sendable {
         case .scrolling:
             guard updateGate(for: .middle, metric: middleMetric) else {
                 state = .tracking
-                return []
+                return [.scrollEnded]
             }
             return scrollIntents(for: delta)
         }
@@ -221,7 +225,9 @@ public struct GestureEngine: Sendable {
             intents = [.dragEnded, .disengaged]
         case .pinched(kind: .index, _, _):
             intents = [.disengaged]
-        case .idle, .tracking, .pinched(kind: .middle, _, _), .scrolling:
+        case .scrolling:
+            intents = [.scrollEnded]
+        case .idle, .tracking, .pinched(kind: .middle, _, _):
             intents = []
         }
         state = .idle

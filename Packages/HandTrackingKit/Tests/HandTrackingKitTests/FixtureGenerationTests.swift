@@ -27,6 +27,39 @@ final class FixtureGenerationTests: XCTestCase {
         try write(smoothPinchTap(), to: directory.appendingPathComponent("smooth_pinch_tap.json"))
         try write(jitteryPinchHold(), to: directory.appendingPathComponent("jittery_pinch_hold.json"))
         try write(handLossMidDrag(), to: directory.appendingPathComponent("hand_loss_mid_drag.json"))
+        try write(middlePinchScroll(), to: directory.appendingPathComponent("middle_pinch_scroll.json"))
+    }
+
+    /// Thumb–middle pinch, held still past tapDuration to promote to
+    /// scrolling, then half a second of upward hand movement, then release.
+    /// Expected in M4: scrollBy intents (dy < 0) ending with scrollEnded —
+    /// and never a clutch engage or click.
+    private func middlePinchScroll() -> [HandPoseFrame] {
+        var builder = FrameSequenceBuilder()
+        for _ in 0..<10 {
+            builder.append(joints: SyntheticHand.joints(thumbIndexRatio: openRatio, thumbMiddleRatio: 1.1))
+        }
+        for i in 0..<5 {
+            let ratio = 1.1 + (closedRatio - 1.1) * Double(i) / 4
+            builder.append(joints: SyntheticHand.joints(thumbIndexRatio: openRatio, thumbMiddleRatio: ratio))
+        }
+        // Still hold past tapDuration promotes the pinch to scrolling.
+        for _ in 0..<16 {
+            builder.append(joints: SyntheticHand.joints(thumbIndexRatio: openRatio, thumbMiddleRatio: closedRatio))
+        }
+        for i in 0..<30 {
+            let center = CGPoint(x: 0.5, y: 0.55 - Double(i) * 0.004)
+            builder.append(joints: SyntheticHand.joints(center: center, thumbIndexRatio: openRatio, thumbMiddleRatio: closedRatio))
+        }
+        let releasedCenter = CGPoint(x: 0.5, y: 0.55 - 29 * 0.004)
+        for i in 0..<5 {
+            let ratio = closedRatio + (1.1 - closedRatio) * Double(i) / 4
+            builder.append(joints: SyntheticHand.joints(center: releasedCenter, thumbIndexRatio: openRatio, thumbMiddleRatio: ratio))
+        }
+        for _ in 0..<10 {
+            builder.append(joints: SyntheticHand.joints(center: releasedCenter, thumbIndexRatio: openRatio, thumbMiddleRatio: 1.1))
+        }
+        return builder.frames
     }
 
     /// Open hand → quick thumb–index pinch (~130 ms, stationary) → open.

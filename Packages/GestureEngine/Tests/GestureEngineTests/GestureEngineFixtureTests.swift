@@ -6,8 +6,10 @@ import XCTest
 /// landmark recordings from `Fixtures/` and the exact intent sequences they
 /// must produce.
 final class GestureEngineFixtureTests: XCTestCase {
-    private func consume(_ fixtureName: String) throws -> [PointerIntent] {
-        var engine = GestureEngine()
+    private func consume(
+        _ fixtureName: String, config: GestureConfig = GestureConfig()
+    ) throws -> [PointerIntent] {
+        var engine = GestureEngine(config: config)
         var intents: [PointerIntent] = []
         for frame in try FixtureLoader.frames(fixtureName) {
             intents += engine.consume(frame)
@@ -59,6 +61,51 @@ final class GestureEngineFixtureTests: XCTestCase {
             Array(intents[dragBeganIndex..<dragEndedIndex]).moveCount, 0,
             "the fixture drags before the hand is lost"
         )
+    }
+
+    func testMiddlePinchScrollEmitsPhasedScrollStream() throws {
+        // Thumb–middle pinch held then moved upward: a scrollBy stream with
+        // negative dy, closed by exactly one scrollEnded on release. The
+        // clutch never engages and nothing clicks.
+        let intents = try consume("middle_pinch_scroll")
+
+        XCTAssertGreaterThanOrEqual(intents.scrollCount, 20)
+        XCTAssertEqual(intents.count(of: .scrollEnded), 1)
+        XCTAssertEqual(intents.last, .scrollEnded)
+        XCTAssertEqual(intents.count(of: .engaged), 0)
+        XCTAssertEqual(intents.clickCount, 0)
+
+        let allScrollsGoUp = intents.allSatisfy { intent in
+            if case .scrollBy(_, let dy) = intent { return dy < 0 }
+            return true
+        }
+        XCTAssertTrue(allScrollsGoUp, "the fixture's hand moves strictly upward")
+    }
+
+    // MARK: - Per-gesture enable toggles (settings)
+
+    func testDisabledClickSuppressesTheTap() throws {
+        var config = GestureConfig()
+        config.clickEnabled = false
+        let intents = try consume("smooth_pinch_tap", config: config)
+        XCTAssertEqual(intents, [.engaged, .disengaged], "clutch still works, click is gone")
+    }
+
+    func testDisabledDragNeverArmsTheButton() throws {
+        var config = GestureConfig()
+        config.dragEnabled = false
+        let intents = try consume("jittery_pinch_hold", config: config)
+        XCTAssertEqual(intents.count(of: .dragBegan), 0)
+        XCTAssertEqual(intents.count(of: .dragEnded), 0)
+        XCTAssertEqual(intents.first, .engaged, "the clutch itself stays available")
+        XCTAssertEqual(intents.last, .disengaged)
+    }
+
+    func testDisabledScrollMakesMiddlePinchHoldInert() throws {
+        var config = GestureConfig()
+        config.scrollEnabled = false
+        let intents = try consume("middle_pinch_scroll", config: config)
+        XCTAssertEqual(intents, [], "a long middle pinch with scroll disabled does nothing")
     }
 
     func testHandLossLandsInIdleAndTracksAgain() throws {
