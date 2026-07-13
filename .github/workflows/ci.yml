@@ -33,3 +33,24 @@ jobs:
         run: swift build --package-path Packages/${{ matrix.package }}
       - name: Test
         run: swift test --package-path Packages/${{ matrix.package }}
+
+  app-build:
+    name: App
+    # Builds the generated AirCursor app target so integration failures in
+    # App/Sources, project.yml, or Info.plist can't merge green.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate
+      - name: Build app
+        run: |
+          xcodebuild -project AirCursor.xcodeproj -scheme AirCursor \
+            -configuration Debug CODE_SIGNING_ALLOWED=NO build
