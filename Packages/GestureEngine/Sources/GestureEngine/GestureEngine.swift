@@ -3,99 +3,76 @@ import Foundation
 import HandPoseCore
 import MotionFilters
 
-/// The two pinches the engine recognizes.
-public enum PinchKind: Equatable, Sendable {
-    /// Thumb–index: clutch/move, click, drag.
-    case index
-    /// Thumb–middle: right click, scroll.
-    case middle
-}
-
-/// Live pinch-metric values, exposed for the debug overlay.
-public struct PinchMetrics: Equatable, Sendable {
-    public var index: Double?
-    public var middle: Double?
-
-    public init(index: Double? = nil, middle: Double? = nil) {
-        self.index = index
-        self.middle = middle
-    }
-}
-
 /// A synchronous, pure state machine turning hand-pose frames into pointer
 /// intents. No OS framework imports; all state is value-typed.
 ///
-/// Gesture semantics (interpreting the v1 spec):
-/// - Index pinch closes → `.engaged`; hand movement flows as `.moveBy`.
-/// - Quick, still release (< `tapDuration`, travel < `tapMovement`) →
-///   `.click(.left)`.
-/// - Travel beyond `tapMovement` commits the pinch to pure clutch-move: no
-///   click on release, and no drag arming — a reposition must never press
-///   the button.
-/// - Holding still past `tapDuration` arms a drag (`.dragBegan`); movement
-///   then drags; release (or hand loss) ends it.
-/// - Middle pinch: quick still release → `.click(.right)`; holding or moving
-///   promotes to scrolling (`.scrollBy` per frame). The clutch never engages.
+/// v2 semantics ("invisible trackpad", calibrated against the recordings in
+/// `Fixtures/recorded/`):
+/// - Point pose moves the cursor; Neutral/openPalm freeze it.
+/// - The pinch is the mouse button — but only when it forms **from the
+///   Point pose** (the entry gate: relaxed hands pinch by accident during
+///   scroll returns). Quick pinch = click, held pinch + movement = drag.
+/// - A pinch formed from Neutral arms **zoom**: each spread ratchet step
+///   emits a zoom action; re-closing re-arms. Zoom releases only through
+///   unambiguous poses — a sustained open palm or two-finger pose (or
+///   dropping the hand) — never through point/pinch, which spreads mimic.
+/// - The Scroll pose (index+middle) scrolls once movement commits past a
+///   dead zone; a short, still visit that returns to Point is a two-finger
+///   tap → right click.
 ///
-/// Safety invariant (non-negotiable): any transition to `.idle` emits
-/// `.dragEnded`/button-up intents first — a stuck drag must be impossible.
+/// Safety invariant (non-negotiable): every exit from a pressed state —
+/// pose change, hand loss, teardown — emits `released` first; a stuck
+/// button is impossible by construction.
 public struct GestureEngine: Sendable {
     public enum State: Equatable, Sendable {
         /// No hand, or confidence collapse outlasted the grace window.
         case idle
-        /// Hand visible, clutch open.
-        case tracking
-        case pinched(kind: PinchKind, since: TimeInterval, origin: CGPoint)
-        case dragging
+        /// Hand visible; relaxed/fist/undefined pose. Cursor frozen.
+        case neutral
+        /// Index-finger pointing: cursor moves.
+        case pointing
+        /// Pinch held as a mouse button (left in practice).
+        case pressed(PointerButton)
+        /// Two-finger pose: scrolling (or a pending tap).
         case scrolling
+        /// Open palm: rest pose and swipe substrate. Cursor frozen.
+        case palm
+        /// Neutral-armed pinch: spread ratchets zoom steps.
+        case zooming
     }
 
     public private(set) var state: State = .idle
     public var config: GestureConfig
-    /// Metric values from the newest frame, for the debug overlay.
-    public private(set) var lastMetrics = PinchMetrics()
+    /// Newest classified pose and pinch metric, for the debug overlay.
+    public private(set) var lastSnapshot: PoseSnapshot?
 
-    private var indexGate: HysteresisGate
-    private var middleGate: HysteresisGate
-    /// Movement joint at the previous good frame; deltas are measured
-    /// between consecutive good frames.
+    private var classifier: PoseClassifier
     private var lastMovementPoint: CGPoint?
-    /// Greatest distance from the pinch origin seen during this pinch.
-    private var maxTravelFromOrigin = 0.0
-    /// An index pinch that traveled beyond `tapMovement`: locked to
-    /// clutch-move, ineligible for click and drag.
-    private var committedToMove = false
-    /// Timestamp of the last frame with all required joints.
     private var lastGoodTimestamp: TimeInterval?
+
+    // Scrolling bookkeeping (tap-vs-stroke).
+    private var scrollEntryTime: TimeInterval = 0
+    private var scrollOrigin: CGPoint = .zero
+    private var scrollTravel: Double = 0
+    private var scrollCommitted = false
+
+    // Zoom ratchet bookkeeping.
+    private var zoomNextStepRatio = 0.0
+    private var zoomExitStreak = 0
 
     public init(config: GestureConfig = GestureConfig()) {
         self.config = config
-        self.indexGate = HysteresisGate(
-            closeThreshold: config.pinchCloseThreshold,
-            openThreshold: config.pinchOpenThreshold
-        )
-        self.middleGate = HysteresisGate(
-            closeThreshold: config.pinchCloseThreshold,
-            openThreshold: config.pinchOpenThreshold
-        )
+        self.classifier = PoseClassifier(config: config)
     }
 
     /// Consumes one frame and returns the intents it implies, in order.
     public mutating func consume(_ frame: HandPoseFrame) -> [PointerIntent] {
-        let indexMetric = Self.pinchMetric(in: frame, tip: .indexTip)
-        let middleMetric = Self.pinchMetric(in: frame, tip: .middleTip)
-        lastMetrics = PinchMetrics(index: indexMetric, middle: middleMetric)
-
-        // Baseline for any gesture work: the index metric and the movement
-        // joint. States driven by the middle pinch also need its metric.
-        let movementPoint = frame.joints[config.movementJoint]
-        let middleRequired = isMiddlePinchActive
-        guard let indexMetric,
-              let movementPoint,
-              !(middleRequired && middleMetric == nil)
+        guard let snapshot = classifier.classify(frame),
+              let movementPoint = frame.joints[config.movementJoint]
         else {
             return handleDegradedFrame(at: frame.timestamp)
         }
+        lastSnapshot = snapshot
         lastGoodTimestamp = frame.timestamp
 
         let delta = lastMovementPoint.map {
@@ -103,199 +80,252 @@ public struct GestureEngine: Sendable {
         }
         defer { lastMovementPoint = movementPoint }
 
-        switch state {
-        case .idle:
-            state = .tracking
-            resetPinchBookkeeping()
-            return []
+        var intents: [PointerIntent] = []
+        let target = targetState(for: snapshot)
+        let transitioned = target != state
+        if transitioned {
+            intents += transition(to: target, at: frame.timestamp, movementPoint: movementPoint, exitPose: snapshot.pose)
+        }
+        intents += tick(
+            snapshot: snapshot,
+            delta: delta,
+            movementPoint: movementPoint,
+            at: frame.timestamp,
+            suppressMotion: transitioned
+        )
+        return intents
+    }
 
-        case .tracking:
-            indexGate.update(indexMetric)
-            if let middleMetric {
-                middleGate.update(middleMetric)
-            }
+    /// Tears the engine down to `.idle` immediately (pipeline stopping).
+    /// Returns the release intents the safety invariant demands.
+    public mutating func reset() -> [PointerIntent] {
+        let intents = idleExitIntents()
+        state = .idle
+        classifier.reset()
+        clearTransientState()
+        return intents
+    }
 
-            if indexGate.isEngaged {
-                middleGate.reset()
-                beginPinch(.index, at: frame.timestamp, origin: movementPoint)
-                return [.engaged]
-            }
-            if middleGate.isEngaged {
-                indexGate.reset()
-                beginPinch(.middle, at: frame.timestamp, origin: movementPoint)
-                return []
-            }
-            return []
+    // MARK: - Target state resolution
 
-        case .pinched(let kind, let since, let origin):
-            updateTravel(from: origin, to: movementPoint)
-            let metric = kind == .index ? indexMetric : middleMetric
-            let gateStillClosed = updateGate(for: kind, metric: metric)
-            let isTap = frame.timestamp - since < config.tapDuration
-                && maxTravelFromOrigin < config.tapMovement
-                && !committedToMove
-
-            guard gateStillClosed else {
-                state = .tracking
-                switch kind {
-                case .index:
-                    return isTap && config.clickEnabled
-                        ? [.click(.left), .disengaged]
-                        : [.disengaged]
-                case .middle:
-                    return isTap && config.rightClickEnabled ? [.click(.right)] : []
+    private mutating func targetState(for snapshot: PoseSnapshot) -> State {
+        // Zoom exits only through UNAMBIGUOUS poses. A wide spread reads as
+        // Point (the index extends) and its re-close reads as pinch — the
+        // recordings prove pose+motion heuristics cannot separate them from
+        // real pointing/clicking, so point/pinch/neutral never leave zoom.
+        // The user releases zoom by flashing an open palm or the two-finger
+        // pose (or dropping the hand).
+        if state == .zooming {
+            switch snapshot.pose {
+            case .pinched, .neutral, .point:
+                zoomExitStreak = 0
+                return .zooming
+            case .scroll, .openPalm:
+                zoomExitStreak += 1
+                if zoomExitStreak < config.zoomExitPoseFrames {
+                    return .zooming
                 }
             }
+        }
 
-            if maxTravelFromOrigin >= config.tapMovement {
-                committedToMove = true
+        switch snapshot.pose {
+        case .point:
+            return .pointing
+        case .scroll:
+            return .scrolling
+        case .openPalm:
+            return .palm
+        case .neutral:
+            return .neutral
+        case .pinched:
+            switch state {
+            case .pointing:
+                return config.leftButtonEnabled ? .pressed(.left) : .pointing
+            case .pressed:
+                return state
+            case .neutral:
+                return config.zoomEnabled ? .zooming : .neutral
+            case .scrolling:
+                // Return-phase noise: relaxed fingers brush the thumb.
+                return .scrolling
+            case .palm, .idle, .zooming:
+                return .neutral
             }
-
-            switch kind {
-            case .index:
-                if config.dragEnabled, !committedToMove,
-                   frame.timestamp - since >= config.tapDuration {
-                    state = .dragging
-                    return [.dragBegan]
-                }
-                return moveIntents(for: delta)
-
-            case .middle:
-                if config.scrollEnabled,
-                   committedToMove || frame.timestamp - since >= config.tapDuration {
-                    state = .scrolling
-                    return scrollIntents(for: delta)
-                }
-                return []
-            }
-
-        case .dragging:
-            guard updateGate(for: .index, metric: indexMetric) else {
-                state = .tracking
-                return [.dragEnded, .disengaged]
-            }
-            return moveIntents(for: delta)
-
-        case .scrolling:
-            guard updateGate(for: .middle, metric: middleMetric) else {
-                state = .tracking
-                return [.scrollEnded]
-            }
-            return scrollIntents(for: delta)
         }
     }
 
-    /// Tears the engine down to `.idle` immediately (pipeline stopping,
-    /// tracking toggled off). Returns the release intents the safety
-    /// invariant demands — post them before discarding the pipeline.
-    public mutating func reset() -> [PointerIntent] {
-        transitionToIdle()
+    // MARK: - Transitions
+
+    private mutating func transition(
+        to target: State,
+        at timestamp: TimeInterval,
+        movementPoint: CGPoint,
+        exitPose: HandPose
+    ) -> [PointerIntent] {
+        var intents: [PointerIntent] = []
+
+        // 1. Leave the old state — buttons up and scroll phases closed first.
+        switch state {
+        case .pressed(let button):
+            intents.append(.released(button))
+        case .scrolling:
+            intents += scrollExitIntents(at: timestamp, exitPose: exitPose)
+        case .idle, .neutral, .pointing, .palm, .zooming:
+            break
+        }
+
+        // 2. Clutch bookkeeping.
+        let wasEngaged = Self.isEngagedState(state)
+        let willEngage = Self.isEngagedState(target)
+        if wasEngaged && !willEngage {
+            intents.append(.disengaged)
+        } else if !wasEngaged && willEngage {
+            intents.append(.engaged)
+        }
+
+        // 3. Enter the new state.
+        switch target {
+        case .pressed(let button):
+            intents.append(.pressed(button))
+        case .scrolling:
+            scrollEntryTime = timestamp
+            scrollOrigin = movementPoint
+            scrollTravel = 0
+            scrollCommitted = false
+        case .zooming:
+            zoomNextStepRatio = config.zoomSpreadStart + config.zoomStepInterval
+            zoomExitStreak = 0
+        case .idle, .neutral, .pointing, .palm:
+            break
+        }
+
+        state = target
+        return intents
     }
 
-    // MARK: - Degraded frames and the safety invariant
-
-    private var isMiddlePinchActive: Bool {
+    private static func isEngagedState(_ state: State) -> Bool {
         switch state {
-        case .pinched(kind: .middle, _, _), .scrolling:
+        case .pointing, .pressed:
             return true
-        case .idle, .tracking, .pinched, .dragging:
+        case .idle, .neutral, .scrolling, .palm, .zooming:
             return false
         }
     }
+
+    /// Closing out a scroll visit: a committed stroke ends its phase; a
+    /// short, still visit that exits into Point is a two-finger tap.
+    private mutating func scrollExitIntents(
+        at timestamp: TimeInterval, exitPose: HandPose
+    ) -> [PointerIntent] {
+        if scrollCommitted {
+            return config.scrollEnabled ? [.scrollEnded] : []
+        }
+        let dwell = timestamp - scrollEntryTime
+        let isTap = config.rightButtonEnabled
+            && exitPose == .point
+            && dwell >= config.tapMinimumDuration
+            && dwell <= config.tapDuration
+            && scrollTravel < config.tapMovement
+        return isTap ? [.pressed(.right), .released(.right)] : []
+    }
+
+    // MARK: - Per-frame behavior within a state
+
+    private mutating func tick(
+        snapshot: PoseSnapshot,
+        delta: CGVector?,
+        movementPoint: CGPoint,
+        at timestamp: TimeInterval,
+        suppressMotion: Bool
+    ) -> [PointerIntent] {
+        switch state {
+        case .idle, .neutral, .palm:
+            return []
+
+        case .pointing, .pressed:
+            // Transition frames anchor freshly — emitting the delta across
+            // the pose change would leap the cursor.
+            guard !suppressMotion,
+                  let delta, delta.dx != 0 || delta.dy != 0
+            else { return [] }
+            return [.moveBy(dx: delta.dx, dy: delta.dy)]
+
+        case .scrolling:
+            guard !suppressMotion else { return [] }
+            let dx = movementPoint.x - scrollOrigin.x
+            let dy = movementPoint.y - scrollOrigin.y
+            scrollTravel = max(scrollTravel, (dx * dx + dy * dy).squareRoot())
+            if !scrollCommitted {
+                // Dead zone: taps stay scroll-free; strokes commit quickly.
+                if scrollTravel >= config.tapMovement
+                    || timestamp - scrollEntryTime > config.tapDuration {
+                    scrollCommitted = true
+                }
+                return []
+            }
+            guard config.scrollEnabled,
+                  let delta, delta.dx != 0 || delta.dy != 0
+            else { return [] }
+            return [.scrollBy(dx: delta.dx, dy: delta.dy)]
+
+        case .zooming:
+            var intents: [PointerIntent] = []
+            let metric = snapshot.indexPinchMetric
+            while metric >= zoomNextStepRatio {
+                intents.append(.system(.zoomStepIn))
+                zoomNextStepRatio += config.zoomStepInterval
+            }
+            if metric < config.pinchCloseThreshold {
+                // Re-closed: re-arm the ratchet for the next spread stroke.
+                zoomNextStepRatio = config.zoomSpreadStart + config.zoomStepInterval
+            }
+            return intents
+        }
+    }
+
+    // MARK: - Degraded frames and the safety invariant
 
     private mutating func handleDegradedFrame(at timestamp: TimeInterval) -> [PointerIntent] {
         if state == .idle {
             return []
         }
-        // Coast through brief Vision dropouts; deltas resume from the last
-        // good frame after recovery.
         if let lastGood = lastGoodTimestamp,
            timestamp - lastGood <= config.trackingLossGrace {
             return []
         }
-        return transitionToIdle()
-    }
-
-    /// The one exit ramp to `.idle`. Emits button-releasing intents first so
-    /// a stuck drag is impossible by construction.
-    private mutating func transitionToIdle() -> [PointerIntent] {
-        let intents: [PointerIntent]
-        switch state {
-        case .dragging:
-            intents = [.dragEnded, .disengaged]
-        case .pinched(kind: .index, _, _):
-            intents = [.disengaged]
-        case .scrolling:
-            intents = [.scrollEnded]
-        case .idle, .tracking, .pinched(kind: .middle, _, _):
-            intents = []
-        }
+        let intents = idleExitIntents()
         state = .idle
-        indexGate.reset()
-        middleGate.reset()
-        resetPinchBookkeeping()
-        lastMovementPoint = nil
-        lastGoodTimestamp = nil
+        classifier.reset()
+        clearTransientState()
         return intents
     }
 
-    // MARK: - Helpers
-
-    private mutating func beginPinch(_ kind: PinchKind, at timestamp: TimeInterval, origin: CGPoint) {
-        state = .pinched(kind: kind, since: timestamp, origin: origin)
-        maxTravelFromOrigin = 0
-        committedToMove = false
-    }
-
-    private mutating func resetPinchBookkeeping() {
-        maxTravelFromOrigin = 0
-        committedToMove = false
-    }
-
-    private mutating func updateTravel(from origin: CGPoint, to point: CGPoint) {
-        let dx = point.x - origin.x
-        let dy = point.y - origin.y
-        maxTravelFromOrigin = max(maxTravelFromOrigin, (dx * dx + dy * dy).squareRoot())
-    }
-
-    /// Updates the gate for `kind` and returns whether it remains closed.
-    /// The inactive gate stays reset while a pinch is in progress.
-    private mutating func updateGate(for kind: PinchKind, metric: Double?) -> Bool {
-        guard let metric else { return true } // metric gaps are grace-handled upstream
-        switch kind {
-        case .index:
-            return indexGate.update(metric)
-        case .middle:
-            return middleGate.update(metric)
+    /// The one set of exit emissions on the way to `.idle`: button up,
+    /// scroll phase closed, clutch released — in that order.
+    private func idleExitIntents() -> [PointerIntent] {
+        var intents: [PointerIntent] = []
+        switch state {
+        case .pressed(let button):
+            intents.append(.released(button))
+            intents.append(.disengaged)
+        case .pointing:
+            intents.append(.disengaged)
+        case .scrolling:
+            if scrollCommitted && config.scrollEnabled {
+                intents.append(.scrollEnded)
+            }
+        case .idle, .neutral, .palm, .zooming:
+            break
         }
+        return intents
     }
 
-    private func moveIntents(for delta: CGVector?) -> [PointerIntent] {
-        guard let delta, delta.dx != 0 || delta.dy != 0 else { return [] }
-        return [.moveBy(dx: delta.dx, dy: delta.dy)]
-    }
-
-    private func scrollIntents(for delta: CGVector?) -> [PointerIntent] {
-        guard let delta, delta.dx != 0 || delta.dy != 0 else { return [] }
-        return [.scrollBy(dx: delta.dx, dy: delta.dy)]
-    }
-
-    /// Thumb-tip to `tip` distance, normalized by the wrist–middleMCP span
-    /// so the metric is invariant to distance from the camera.
-    private static func pinchMetric(in frame: HandPoseFrame, tip: HandJoint) -> Double? {
-        guard let thumb = frame.joints[.thumbTip],
-              let tipPoint = frame.joints[tip],
-              let wrist = frame.joints[.wrist],
-              let middleMCP = frame.joints[.middleMCP]
-        else { return nil }
-
-        let spanX = wrist.x - middleMCP.x
-        let spanY = wrist.y - middleMCP.y
-        let span = (spanX * spanX + spanY * spanY).squareRoot()
-        guard span > .ulpOfOne else { return nil }
-
-        let dx = thumb.x - tipPoint.x
-        let dy = thumb.y - tipPoint.y
-        return (dx * dx + dy * dy).squareRoot() / span
+    private mutating func clearTransientState() {
+        lastMovementPoint = nil
+        lastGoodTimestamp = nil
+        lastSnapshot = nil
+        scrollTravel = 0
+        scrollCommitted = false
+        zoomExitStreak = 0
     }
 }

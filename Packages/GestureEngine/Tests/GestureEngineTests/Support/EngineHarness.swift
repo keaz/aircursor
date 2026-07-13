@@ -3,41 +3,13 @@ import Foundation
 import GestureEngine
 import HandPoseCore
 
-/// Minimal six-joint hand for engine tests. Geometry is chosen so the pinch
-/// metrics equal the requested ratios *exactly*: the wrist–middleMCP span is
-/// 0.2 and each tip sits at `ratio × 0.2` from the thumb tip along one axis.
-/// All joints translate rigidly with `center`.
-enum TestHand {
-    static let span = 0.2
-
-    static func joints(
-        center: CGPoint = CGPoint(x: 0.5, y: 0.55),
-        indexRatio: Double,
-        middleRatio: Double = 1.1
-    ) -> [HandJoint: CGPoint] {
-        let wrist = CGPoint(x: center.x, y: center.y + 0.25)
-        let middleMCP = CGPoint(x: wrist.x, y: wrist.y - span)
-        let indexMCP = CGPoint(x: middleMCP.x - 0.045, y: middleMCP.y + 0.01)
-        let thumbTip = CGPoint(x: center.x - 0.04, y: center.y)
-        let indexTip = CGPoint(x: thumbTip.x + indexRatio * span, y: thumbTip.y)
-        let middleTip = CGPoint(x: thumbTip.x, y: thumbTip.y - middleRatio * span)
-        return [
-            .wrist: wrist,
-            .middleMCP: middleMCP,
-            .indexMCP: indexMCP,
-            .thumbTip: thumbTip,
-            .indexTip: indexTip,
-            .middleTip: middleTip,
-        ]
-    }
-}
-
-/// Feeds frames at 60 fps and accumulates the engine's emitted intents.
+/// Feeds v2 pose frames at 30 fps (the recorded cameras' rate) and
+/// accumulates emitted intents.
 struct EngineHarness {
     var engine: GestureEngine
     private(set) var intents: [PointerIntent] = []
-    private var timestamp: TimeInterval = 0
-    let dt = 1.0 / 60
+    private(set) var timestamp: TimeInterval = 0
+    let dt = 1.0 / 30
 
     init(config: GestureConfig = GestureConfig()) {
         self.engine = GestureEngine(config: config)
@@ -45,15 +17,15 @@ struct EngineHarness {
 
     @discardableResult
     mutating func feed(
-        indexRatio: Double,
-        middleRatio: Double = 1.1,
+        fingers: TestHandV2.Fingers,
+        indexPinch: Double? = nil,
         center: CGPoint = CGPoint(x: 0.5, y: 0.55),
         frames: Int = 1
     ) -> [PointerIntent] {
         var batch: [PointerIntent] = []
         for _ in 0..<frames {
             let frame = HandPoseFrame(
-                joints: TestHand.joints(center: center, indexRatio: indexRatio, middleRatio: middleRatio),
+                joints: TestHandV2.joints(center: center, fingers: fingers, indexPinch: indexPinch),
                 timestamp: timestamp
             )
             batch += engine.consume(frame)
@@ -72,6 +44,17 @@ struct EngineHarness {
         }
         intents += batch
         return batch
+    }
+
+    // Convenience poses.
+    @discardableResult
+    mutating func point(center: CGPoint = CGPoint(x: 0.5, y: 0.55), frames: Int = 1) -> [PointerIntent] {
+        feed(fingers: .init(index: true), center: center, frames: frames)
+    }
+
+    @discardableResult
+    mutating func fist(frames: Int = 1) -> [PointerIntent] {
+        feed(fingers: .init(), frames: frames)
     }
 }
 
@@ -93,8 +76,18 @@ enum FixtureLoader {
 }
 
 extension Array where Element == PointerIntent {
-    var clickCount: Int {
-        filter { if case .click = $0 { return true } else { return false } }.count
+    func pressCount(_ button: PointerButton? = nil) -> Int {
+        filter {
+            if case .pressed(let b) = $0 { return button == nil || b == button }
+            return false
+        }.count
+    }
+
+    func releaseCount(_ button: PointerButton? = nil) -> Int {
+        filter {
+            if case .released(let b) = $0 { return button == nil || b == button }
+            return false
+        }.count
     }
 
     var moveCount: Int {
@@ -103,6 +96,13 @@ extension Array where Element == PointerIntent {
 
     var scrollCount: Int {
         filter { if case .scrollBy = $0 { return true } else { return false } }.count
+    }
+
+    func systemCount(_ action: SystemAction? = nil) -> Int {
+        filter {
+            if case .system(let a) = $0 { return action == nil || a == action }
+            return false
+        }.count
     }
 
     func count(of intent: PointerIntent) -> Int {

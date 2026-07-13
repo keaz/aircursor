@@ -3,249 +3,279 @@ import GestureEngine
 import HandPoseCore
 import XCTest
 
-/// Programmatic transition coverage: every branch of the tap / clutch-move /
-/// drag / right-tap / scroll decision tree, plus grace-period behavior.
+/// v2 transition coverage: pointing clutch, pinch-is-the-button with entry
+/// gating, two-finger scroll and tap, zoom arming, grace, toggles, teardown.
 final class GestureEngineTransitionTests: XCTestCase {
-    // MARK: - Clutch move vs click vs drag
+    // MARK: - Pointing clutch
 
-    func testMovingBeyondTapMovementCommitsToClutchMove() {
+    func testPointingEngagesMovesAndNeutralDisengages() {
         var harness = EngineHarness()
-        harness.feed(indexRatio: 1.0, frames: 3)
-        harness.feed(indexRatio: 0.15, frames: 2)
+        harness.fist(frames: 2)
+        harness.point(frames: 1)
+        XCTAssertEqual(harness.intents, [.engaged])
 
-        // Sweep 0.05 to the right — far past tapMovement (0.02).
-        for i in 1...10 {
-            harness.feed(
-                indexRatio: 0.15,
-                center: CGPoint(x: 0.5 + Double(i) * 0.005, y: 0.55)
-            )
-        }
-        // Hold still for well over tapDuration: a committed move must NOT
-        // retro-arm a drag (that would press the button mid-positioning).
-        harness.feed(
-            indexRatio: 0.15,
-            center: CGPoint(x: 0.55, y: 0.55),
-            frames: 30
-        )
-        harness.feed(indexRatio: 1.0, frames: 2)
-
-        XCTAssertEqual(harness.intents.count(of: .engaged), 1)
-        XCTAssertEqual(harness.intents.count(of: .dragBegan), 0, "moving commits to move, never drag")
-        XCTAssertEqual(harness.intents.clickCount, 0, "a moved pinch must not click on release")
-        XCTAssertGreaterThan(harness.intents.moveCount, 5)
-        XCTAssertEqual(harness.intents.last, .disengaged)
-    }
-
-    func testMoveDeltasMatchHandTravel() {
-        var harness = EngineHarness()
-        harness.feed(indexRatio: 1.0, frames: 3)
-        harness.feed(indexRatio: 0.15, frames: 1)
-
-        let batch = harness.feed(indexRatio: 0.15, center: CGPoint(x: 0.51, y: 0.54))
+        let batch = harness.point(center: CGPoint(x: 0.52, y: 0.54))
         guard case .moveBy(let dx, let dy)? = batch.first, batch.count == 1 else {
-            return XCTFail("expected a single moveBy, got \(batch)")
+            return XCTFail("expected one moveBy, got \(batch)")
         }
-        XCTAssertEqual(dx, 0.01, accuracy: 1e-9)
+        XCTAssertEqual(dx, 0.02, accuracy: 1e-9)
         XCTAssertEqual(dy, -0.01, accuracy: 1e-9)
+
+        harness.fist(frames: 1)
+        XCTAssertEqual(harness.intents.last, .disengaged)
+        XCTAssertEqual(harness.engine.state, .neutral)
     }
 
-    func testStationaryPinchEmitsNoMoves() {
+    func testOpenPalmFreezesTheCursor() {
         var harness = EngineHarness()
-        harness.feed(indexRatio: 1.0, frames: 3)
-        harness.feed(indexRatio: 0.15, frames: 5)
-        XCTAssertEqual(harness.intents.moveCount, 0)
+        harness.point(frames: 2)
+        harness.feed(fingers: .init(index: true, middle: true, ring: true, little: true))
+        XCTAssertEqual(harness.intents.last, .disengaged)
+
+        let moved = harness.feed(
+            fingers: .init(index: true, middle: true, ring: true, little: true),
+            center: CGPoint(x: 0.6, y: 0.5)
+        )
+        XCTAssertEqual(moved, [], "open palm must not move the cursor")
     }
 
-    func testStillHoldArmsDragAndMovesDragTheButton() {
+    // MARK: - Pinch is the button (entry-gated)
+
+    func testPinchFromPointPressesAndReleasesLeft() {
         var harness = EngineHarness()
-        harness.feed(indexRatio: 1.0, frames: 3)
-        harness.feed(indexRatio: 0.15, frames: 17) // ≈267 ms still — arms the drag
+        harness.point(frames: 2)
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2)
+        XCTAssertEqual(harness.intents, [.engaged, .pressed(.left)])
 
-        XCTAssertEqual(harness.intents.count(of: .dragBegan), 1)
-        XCTAssertEqual(harness.engine.state, .dragging)
+        harness.feed(fingers: .init(index: true), indexPinch: 0.8)
+        XCTAssertEqual(harness.intents, [.engaged, .pressed(.left), .released(.left)])
+        XCTAssertEqual(harness.engine.state, .pointing, "release back to point keeps the clutch")
+    }
 
+    func testPinchDragMovesWhilePressed() {
+        var harness = EngineHarness()
+        harness.point(frames: 2)
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2)
         for i in 1...5 {
             harness.feed(
-                indexRatio: 0.15,
-                center: CGPoint(x: 0.5 + Double(i) * 0.005, y: 0.55)
+                fingers: .init(index: true),
+                indexPinch: 0.2,
+                center: CGPoint(x: 0.5 + Double(i) * 0.01, y: 0.55)
             )
         }
-        harness.feed(indexRatio: 1.0, frames: 1)
+        harness.fist(frames: 1)
 
-        XCTAssertGreaterThanOrEqual(harness.intents.moveCount, 5, "drag moves flow as moveBy")
-        XCTAssertEqual(harness.intents.suffix(2), [.dragEnded, .disengaged])
-        XCTAssertEqual(harness.intents.clickCount, 0)
+        XCTAssertEqual(harness.intents.pressCount(.left), 1)
+        XCTAssertGreaterThanOrEqual(harness.intents.moveCount, 5, "drag moves flow while pressed")
+        let releaseIndex = harness.intents.firstIndex(of: .released(.left))!
+        let disengageIndex = harness.intents.firstIndex(of: .disengaged)!
+        XCTAssertLessThan(releaseIndex, disengageIndex, "button up before clutch release")
     }
 
-    func testTapMovementBoundary() {
-        // 0.019 of travel still clicks; 0.021 commits to move.
-        var clicking = EngineHarness()
-        clicking.feed(indexRatio: 1.0, frames: 3)
-        clicking.feed(indexRatio: 0.15, frames: 1)
-        clicking.feed(indexRatio: 0.15, center: CGPoint(x: 0.519, y: 0.55))
-        clicking.feed(indexRatio: 1.0, frames: 1)
-        XCTAssertEqual(clicking.intents.clickCount, 1)
-
-        var moving = EngineHarness()
-        moving.feed(indexRatio: 1.0, frames: 3)
-        moving.feed(indexRatio: 0.15, frames: 1)
-        moving.feed(indexRatio: 0.15, center: CGPoint(x: 0.521, y: 0.55))
-        moving.feed(indexRatio: 1.0, frames: 1)
-        XCTAssertEqual(moving.intents.clickCount, 0)
-    }
-
-    // MARK: - Middle pinch: right click and scroll
-
-    func testMiddlePinchTapRightClicks() {
+    func testPinchFromNeutralNeverPresses() {
         var harness = EngineHarness()
-        harness.feed(indexRatio: 1.0, frames: 3)
-        harness.feed(indexRatio: 1.0, middleRatio: 0.15, frames: 5)
-        harness.feed(indexRatio: 1.0, middleRatio: 1.1, frames: 2)
-
-        XCTAssertEqual(harness.intents, [.click(.right)], "a right tap is only a click — no clutch")
+        harness.fist(frames: 3)
+        harness.feed(fingers: .init(), indexPinch: 0.2, frames: 3)
+        XCTAssertEqual(harness.intents.pressCount(), 0, "neutral-formed pinches arm zoom, not the button")
     }
 
-    func testMiddlePinchHoldAndVerticalMoveScrolls() {
+    // MARK: - Zoom (pinch armed from neutral)
+
+    func testZoomSpreadStepsAndRearmsOnReclose() {
         var harness = EngineHarness()
-        harness.feed(indexRatio: 1.0, frames: 3)
-        harness.feed(indexRatio: 1.0, middleRatio: 0.15, frames: 3)
+        harness.fist(frames: 3)
+        harness.feed(fingers: .init(), indexPinch: 0.2, frames: 2) // arm
+        harness.feed(fingers: .init(), indexPinch: 1.2)            // spread past 1.15
+        XCTAssertEqual(harness.intents.systemCount(.zoomStepIn), 1)
+
+        harness.feed(fingers: .init(), indexPinch: 1.38)           // past 1.30
+        XCTAssertEqual(harness.intents.systemCount(.zoomStepIn), 2)
+
+        harness.feed(fingers: .init(), indexPinch: 0.2, frames: 2) // re-close re-arms
+        harness.feed(fingers: .init(), indexPinch: 1.2)
+        XCTAssertEqual(harness.intents.systemCount(.zoomStepIn), 3)
+        XCTAssertEqual(harness.intents.pressCount(), 0)
+    }
+
+    func testPointingNeverExitsZoom() {
+        // Spreads read as Point with real wrist drift — the recordings prove
+        // pose+motion can't separate them from pointing, so point never
+        // leaves zoom, no matter how long or how far it moves.
+        var harness = EngineHarness()
+        harness.fist(frames: 3)
+        harness.feed(fingers: .init(), indexPinch: 0.2, frames: 2)
+        XCTAssertEqual(harness.engine.state, .zooming)
 
         for i in 1...10 {
+            harness.point(center: CGPoint(x: 0.5 + Double(i) * 0.03, y: 0.55))
+        }
+        XCTAssertEqual(harness.engine.state, .zooming)
+        XCTAssertEqual(harness.intents.count(of: .engaged), 0)
+        XCTAssertEqual(harness.intents.pressCount(), 0)
+    }
+
+    func testSustainedOpenPalmExitsZoomAndClickingWorksAgain() {
+        var harness = EngineHarness()
+        harness.fist(frames: 3)
+        harness.feed(fingers: .init(), indexPinch: 0.2, frames: 2)
+        XCTAssertEqual(harness.engine.state, .zooming)
+
+        harness.feed(
+            fingers: .init(index: true, middle: true, ring: true, little: true),
+            frames: 3
+        )
+        XCTAssertEqual(harness.engine.state, .palm, "an open palm releases zoom")
+
+        harness.point(frames: 2)
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2)
+        XCTAssertEqual(harness.intents.pressCount(.left), 1, "pinch-from-point presses again")
+    }
+
+    // MARK: - Scroll and two-finger tap
+
+    func testScrollEmitsAfterDeadZoneAndEndsOnExit() {
+        var harness = EngineHarness()
+        harness.point(frames: 2)
+        // Two-finger pose, moving upward each frame well past the dead zone.
+        for i in 0...6 {
             harness.feed(
-                indexRatio: 1.0,
-                middleRatio: 0.15,
-                center: CGPoint(x: 0.5, y: 0.55 - Double(i) * 0.005)
+                fingers: .init(index: true, middle: true),
+                center: CGPoint(x: 0.5, y: 0.55 - Double(i) * 0.01)
             )
         }
-        XCTAssertEqual(harness.engine.state, .scrolling)
-        harness.feed(indexRatio: 1.0, middleRatio: 1.1, frames: 2)
-
-        XCTAssertGreaterThanOrEqual(harness.intents.scrollCount, 5)
-        XCTAssertEqual(harness.intents.clickCount, 0)
-        XCTAssertEqual(harness.intents.count(of: .engaged), 0, "scroll never engages the clutch")
-        XCTAssertEqual(harness.intents.last, .scrollEnded, "release must close the scroll phase")
-        XCTAssertEqual(harness.engine.state, .tracking)
-
-        let hasUpwardScroll = harness.intents.contains { intent in
+        XCTAssertGreaterThanOrEqual(harness.intents.scrollCount, 3)
+        let upScrolls = harness.intents.allSatisfy { intent in
             if case .scrollBy(_, let dy) = intent { return dy < 0 }
-            return false
+            return true
         }
-        XCTAssertTrue(hasUpwardScroll)
+        XCTAssertTrue(upScrolls)
+
+        harness.point(frames: 1)
+        XCTAssertEqual(harness.intents.last, .engaged)
+        XCTAssertEqual(harness.intents.count(of: .scrollEnded), 1)
+        let endIndex = harness.intents.firstIndex(of: .scrollEnded)!
+        let engageIndex = harness.intents.lastIndex(of: .engaged)!
+        XCTAssertLessThan(endIndex, engageIndex, "scroll phase closes before re-engaging")
     }
 
-    func testHandLossMidScrollEndsTheScrollPhase() {
+    func testTwoFingerTapRightClicks() {
         var harness = EngineHarness()
-        harness.feed(indexRatio: 1.0, frames: 3)
-        harness.feed(indexRatio: 1.0, middleRatio: 0.15, frames: 17)
-        XCTAssertEqual(harness.engine.state, .scrolling)
+        harness.point(frames: 3)
+        harness.feed(fingers: .init(index: true, middle: true), frames: 3) // ~100 ms still
+        harness.point(frames: 1)
 
-        let lostBatch = harness.feedLost(frames: 10)
-        XCTAssertEqual(lostBatch, [.scrollEnded], "apps need the phase closed on hand loss")
-        XCTAssertEqual(harness.engine.state, .idle)
+        XCTAssertEqual(harness.intents.pressCount(.right), 1)
+        XCTAssertEqual(harness.intents.releaseCount(.right), 1)
+        XCTAssertEqual(harness.intents.scrollCount, 0, "a tap never scrolls")
+        XCTAssertEqual(harness.intents.count(of: .scrollEnded), 0)
     }
 
-    func testResetMidScrollEndsTheScrollPhase() {
+    func testSingleFrameScrollBlipDoesNothing() {
         var harness = EngineHarness()
-        harness.feed(indexRatio: 1.0, frames: 3)
-        harness.feed(indexRatio: 1.0, middleRatio: 0.15, frames: 17)
-        XCTAssertEqual(harness.engine.state, .scrolling)
-        XCTAssertEqual(harness.engine.reset(), [.scrollEnded])
+        harness.point(frames: 3)
+        harness.feed(fingers: .init(index: true, middle: true), frames: 1)
+        harness.point(frames: 1)
+        XCTAssertEqual(harness.intents.pressCount(.right), 0, "one-frame blips must not right-click")
+        XCTAssertEqual(harness.intents.scrollCount, 0)
     }
 
-    func testDisabledRightClickSuppressesMiddleTap() {
+    func testLongStillTwoFingerHoldIsNotATap() {
+        var harness = EngineHarness()
+        harness.point(frames: 3)
+        harness.feed(fingers: .init(index: true, middle: true), frames: 12) // 400 ms still
+        harness.point(frames: 1)
+        XCTAssertEqual(harness.intents.pressCount(.right), 0, "held past tapDuration is not a tap")
+    }
+
+    // MARK: - Toggles
+
+    func testDisabledLeftButtonKeepsMovementButNeverPresses() {
         var config = GestureConfig()
-        config.rightClickEnabled = false
+        config.leftButtonEnabled = false
         var harness = EngineHarness(config: config)
-        harness.feed(indexRatio: 1.0, frames: 3)
-        harness.feed(indexRatio: 1.0, middleRatio: 0.15, frames: 5)
-        harness.feed(indexRatio: 1.0, middleRatio: 1.1, frames: 2)
-        XCTAssertEqual(harness.intents, [])
+        harness.point(frames: 2)
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2, frames: 2)
+        harness.feed(
+            fingers: .init(index: true), indexPinch: 0.2, center: CGPoint(x: 0.53, y: 0.55)
+        )
+        XCTAssertEqual(harness.intents.pressCount(), 0)
+        XCTAssertGreaterThan(harness.intents.moveCount, 0, "movement still works while pinched")
     }
 
-    func testIndexPinchWinsWhenBothPinchesClose() {
-        var harness = EngineHarness()
-        harness.feed(indexRatio: 1.0, frames: 3)
-        harness.feed(indexRatio: 0.15, middleRatio: 0.15, frames: 4)
-        harness.feed(indexRatio: 1.0, middleRatio: 1.1, frames: 2)
-
-        XCTAssertEqual(harness.intents, [.engaged, .click(.left), .disengaged])
+    func testDisabledRightButtonSuppressesTap() {
+        var config = GestureConfig()
+        config.rightButtonEnabled = false
+        var harness = EngineHarness(config: config)
+        harness.point(frames: 3)
+        harness.feed(fingers: .init(index: true, middle: true), frames: 3)
+        harness.point(frames: 1)
+        XCTAssertEqual(harness.intents.pressCount(.right), 0)
     }
 
-    // MARK: - Tracking loss and grace
-
-    func testBriefJointDropoutInsideGraceKeepsTheDrag() {
-        var harness = EngineHarness()
-        harness.feed(indexRatio: 1.0, frames: 3)
-        harness.feed(indexRatio: 0.15, frames: 17) // drag armed
-        XCTAssertEqual(harness.engine.state, .dragging)
-
-        let lostBatch = harness.feedLost(frames: 3) // 50 ms < 100 ms grace
-        XCTAssertEqual(lostBatch, [], "inside the grace window nothing is emitted")
-        XCTAssertEqual(harness.engine.state, .dragging, "grace must preserve the drag")
-
-        harness.feed(indexRatio: 0.15, center: CGPoint(x: 0.52, y: 0.55))
-        XCTAssertEqual(harness.intents.count(of: .dragEnded), 0)
-        XCTAssertGreaterThan(harness.intents.moveCount, 0, "movement resumes after recovery")
-    }
-
-    func testLossBeyondGraceMidDragReleasesButtonBeforeIdle() {
-        var harness = EngineHarness()
-        harness.feed(indexRatio: 1.0, frames: 3)
-        harness.feed(indexRatio: 0.15, frames: 17)
-        XCTAssertEqual(harness.engine.state, .dragging)
-
-        let lostBatch = harness.feedLost(frames: 10) // ≈167 ms > grace
-        XCTAssertEqual(lostBatch, [.dragEnded, .disengaged])
-        XCTAssertEqual(harness.engine.state, .idle)
-    }
-
-    func testLossBeyondGraceMidClutchMoveOnlyDisengages() {
-        var harness = EngineHarness()
-        harness.feed(indexRatio: 1.0, frames: 3)
-        harness.feed(indexRatio: 0.15, frames: 2)
-        for i in 1...5 {
-            harness.feed(indexRatio: 0.15, center: CGPoint(x: 0.5 + Double(i) * 0.01, y: 0.55))
+    func testDisabledScrollMakesTwoFingerPoseInert() {
+        var config = GestureConfig()
+        config.scrollEnabled = false
+        var harness = EngineHarness(config: config)
+        harness.point(frames: 2)
+        for i in 0...6 {
+            harness.feed(
+                fingers: .init(index: true, middle: true),
+                center: CGPoint(x: 0.5, y: 0.55 - Double(i) * 0.01)
+            )
         }
+        XCTAssertEqual(harness.intents.scrollCount, 0)
+        XCTAssertEqual(harness.intents.count(of: .scrollEnded), 0)
+    }
 
-        let lostBatch = harness.feedLost(frames: 10)
-        XCTAssertEqual(lostBatch, [.disengaged], "no drag was armed, so no dragEnded")
+    func testDisabledZoomIgnoresNeutralPinch() {
+        var config = GestureConfig()
+        config.zoomEnabled = false
+        var harness = EngineHarness(config: config)
+        harness.fist(frames: 3)
+        harness.feed(fingers: .init(), indexPinch: 0.2, frames: 2)
+        harness.feed(fingers: .init(), indexPinch: 1.3)
+        XCTAssertEqual(harness.intents.systemCount(), 0)
+    }
+
+    // MARK: - Loss, grace, teardown
+
+    func testBriefDropoutInsideGraceKeepsThePress() {
+        var harness = EngineHarness()
+        harness.point(frames: 2)
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2)
+        harness.feedLost(frames: 2) // ~66 ms < 100 ms grace
+        XCTAssertEqual(harness.intents.releaseCount(), 0)
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2)
+        XCTAssertEqual(harness.engine.state, .pressed(.left))
+    }
+
+    func testLossBeyondGraceReleasesButtonThenDisengages() {
+        var harness = EngineHarness()
+        harness.point(frames: 2)
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2)
+        let lost = harness.feedLost(frames: 6) // 200 ms > grace
+        XCTAssertEqual(lost, [.released(.left), .disengaged])
         XCTAssertEqual(harness.engine.state, .idle)
     }
 
-    func testLossDuringPendingPinchNeverClicks() {
+    func testLossMidScrollEndsThePhase() {
         var harness = EngineHarness()
-        harness.feed(indexRatio: 1.0, frames: 3)
-        harness.feed(indexRatio: 0.15, frames: 2)
-        harness.feedLost(frames: 10)
-        XCTAssertEqual(harness.intents.clickCount, 0, "a release never observed is not a tap")
+        harness.point(frames: 2)
+        for i in 0...5 {
+            harness.feed(
+                fingers: .init(index: true, middle: true),
+                center: CGPoint(x: 0.5, y: 0.55 - Double(i) * 0.01)
+            )
+        }
+        let lost = harness.feedLost(frames: 6)
+        XCTAssertEqual(lost, [.scrollEnded])
     }
 
-    // MARK: - External reset (pipeline teardown)
-
-    func testResetMidDragReleasesTheButtonFirst() {
+    func testResetMidPressReleasesFirst() {
         var harness = EngineHarness()
-        harness.feed(indexRatio: 1.0, frames: 3)
-        harness.feed(indexRatio: 0.15, frames: 17)
-        XCTAssertEqual(harness.engine.state, .dragging)
-
-        // Stopping the pipeline mid-drag must obey the same safety invariant
-        // as hand loss.
-        XCTAssertEqual(harness.engine.reset(), [.dragEnded, .disengaged])
+        harness.point(frames: 2)
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2)
+        XCTAssertEqual(harness.engine.reset(), [.released(.left), .disengaged])
         XCTAssertEqual(harness.engine.state, .idle)
-    }
-
-    func testResetWhileIdleEmitsNothing() {
-        var engine = GestureEngine()
-        XCTAssertEqual(engine.reset(), [])
-        XCTAssertEqual(engine.state, .idle)
-    }
-
-    // MARK: - Debug metrics
-
-    func testExposesLastPinchMetrics() throws {
-        var harness = EngineHarness()
-        harness.feed(indexRatio: 0.5, middleRatio: 0.9)
-        XCTAssertEqual(try XCTUnwrap(harness.engine.lastMetrics.index), 0.5, accuracy: 1e-9)
-        XCTAssertEqual(try XCTUnwrap(harness.engine.lastMetrics.middle), 0.9, accuracy: 1e-9)
     }
 }
