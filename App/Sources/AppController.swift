@@ -195,7 +195,7 @@ final class AppController {
         post(commands(for: intents, at: frame.timestamp))
 
         gestureStateLabel = Self.label(for: engine.state)
-        indexPinchMetric = engine.lastMetrics.index
+        indexPinchMetric = engine.lastSnapshot?.indexPinchMetric
     }
 
     private func fail(_ error: Error) {
@@ -233,18 +233,19 @@ final class AppController {
 
     // MARK: - Settings
 
-    /// Settings apply immediately: sensitivity flows to the mapper, tap
-    /// duration and the per-gesture enables to the engine.
+    /// Settings apply immediately: sensitivity flows to the mapper, the
+    /// per-gesture enables to the engine.
     private func applyTunables() {
         let defaults = UserDefaults.standard
         mapper?.config.sensitivity = defaults.double(forKey: SettingsKeys.sensitivity)
 
         var engineConfig = engine.config
-        engineConfig.tapDuration = defaults.double(forKey: SettingsKeys.tapDuration)
-        engineConfig.clickEnabled = defaults.bool(forKey: SettingsKeys.clickEnabled)
-        engineConfig.dragEnabled = defaults.bool(forKey: SettingsKeys.dragEnabled)
-        engineConfig.rightClickEnabled = defaults.bool(forKey: SettingsKeys.rightClickEnabled)
+        engineConfig.leftButtonEnabled = defaults.bool(forKey: SettingsKeys.leftButtonEnabled)
+        engineConfig.rightButtonEnabled = defaults.bool(forKey: SettingsKeys.rightButtonEnabled)
         engineConfig.scrollEnabled = defaults.bool(forKey: SettingsKeys.scrollEnabled)
+        engineConfig.zoomEnabled = defaults.bool(forKey: SettingsKeys.zoomEnabled)
+        engineConfig.swipesEnabled = defaults.bool(forKey: SettingsKeys.swipesEnabled)
+        engineConfig.missionControlEnabled = defaults.bool(forKey: SettingsKeys.missionControlEnabled)
         engine.config = engineConfig
     }
 
@@ -313,11 +314,13 @@ final class AppController {
     private static func label(for state: GestureEngine.State) -> String {
         switch state {
         case .idle: return "idle"
-        case .tracking: return "tracking"
-        case .pinched(kind: .index, _, _): return "pinched (index)"
-        case .pinched(kind: .middle, _, _): return "pinched (middle)"
-        case .dragging: return "dragging"
+        case .neutral: return "neutral"
+        case .pointing: return "pointing"
+        case .pressed(.left): return "left button held"
+        case .pressed(.right): return "right button held"
         case .scrolling: return "scrolling"
+        case .palm: return "open palm"
+        case .zooming: return "zooming"
         }
     }
 

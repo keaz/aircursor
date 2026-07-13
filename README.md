@@ -1,9 +1,11 @@
 # AirCursor
 
 A macOS menu bar app that tracks one hand through the built-in camera and
-controls the system pointer — move, click, drag, right click, and scroll —
-with pinch gestures. Everything runs on-device; camera frames never leave
-the process and are never written to disk.
+turns hand poses into an invisible trackpad: point to move the pointer,
+pinch to click and drag, two-finger strokes to scroll, palm swipes for
+Spaces, a fist-snap for Mission Control, and pinch-spread to zoom.
+Everything runs on-device; camera frames never leave the process and are
+never written to disk.
 
 ## How it works
 
@@ -26,21 +28,30 @@ your hand raised, palm toward the screen. Start tracking from the menu bar
 icon. The icon shows state: slashed hand = missing permissions, outline =
 paused, filled = tracking.
 
+The gesture vocabulary is an invisible trackpad, built from hand *poses*
+(calibrated against real recordings in `Fixtures/recorded/`):
+
 | Gesture | How | Result |
 | --- | --- | --- |
-| **Move** | Pinch thumb + index finger, move your hand, release to reposition | Cursor moves while pinched, like a finger on a trackpad — release and re-pinch to cover long distances |
-| **Left click** | Quick thumb–index pinch tap — fast and still | Click wherever the cursor is |
-| **Drag** | Pinch, hold still for a beat (~¼ s), then move | The button presses when you hold, drags as you move, releases when you release |
-| **Right click** | Quick thumb–middle pinch tap | Context menu |
-| **Scroll** | Thumb–middle pinch, hold (or start moving), then move vertically | Trackpad-style pixel scrolling; release to stop |
+| **Move** | Point with your index finger (other fingers curled), move your hand | Cursor follows; relax or open your hand to "lift off" and reposition |
+| **Click** | While pointing, pinch thumb + index and release | The pinch *is* the button: quick pinch = click, two quick pinches = double-click |
+| **Drag** | While pointing, pinch, hold the pinch, move | Button stays down while pinched; release anywhere to drop |
+| **Right click** | Flick into a two-finger pose (index + middle) and out, without stroking | Context menu |
+| **Scroll** | Extend index + middle together, stroke up or down | Trackpad-style pixel scrolling per stroke |
+| **Switch Spaces** | Open palm, flick left or right | ctrl+← / ctrl+→ |
+| **Mission Control** | Snap a fist open into all five fingers | ctrl+↑ |
+| **Zoom in** | From a relaxed hand (not pointing), pinch, then spread thumb and index; re-close and spread again to keep zooming | ⌘+ steps |
 
-Two behaviors worth knowing:
+Behaviors worth knowing:
 
-- **Moving cancels clicking.** A pinch that travels commits to cursor
-  movement — it will never click or start a drag on release. To drag, pinch
-  and *hold still* first; to click, tap without moving.
+- **Clicks only arm from pointing.** A pinch formed from a relaxed hand
+  arms *zoom* instead — that separation is what makes scroll returns and
+  zoom spreads unable to phantom-click.
+- **Leaving zoom**: flash an open palm (or the two-finger pose), or drop
+  your hand. Pointing alone deliberately does not exit zoom — a wide
+  spread looks exactly like pointing to the camera.
 - **Losing tracking is safe.** If your hand leaves the frame mid-drag, the
-  button releases within ~100 ms. A stuck drag is impossible by design.
+  button releases within ~100 ms. A stuck button is impossible by design.
 
 ### Settings
 
@@ -95,12 +106,14 @@ The Xcode project is generated — edit `project.yml`, never the `.xcodeproj`.
 
 ## Development notes
 
-- **Fixtures** in `Fixtures/` are synthetic landmark recordings driving the
-  GestureEngine tests. Regenerate after changing the generator:
-  `REGENERATE_FIXTURES=1 swift test --package-path Packages/HandTrackingKit --filter FixtureGenerationTests`
+- **Fixtures** in `Fixtures/recorded/` are the user's real gestures as
+  landmark JSON, extracted from videos with the offline tool:
+  `swift run --package-path Packages/HandTrackingKit fixture-extract <in.mov> <out.json>`.
+  They drive the GestureEngine tests and calibrate every threshold; raw
+  videos stay out of the repo (landmarks only, always).
 - **ReplaySource** plays fixtures back as a live-like frame stream for
   camera-free development; `FrameRecorder` (and the overlay's Record button)
-  captures new ones.
+  captures new ones directly from live tracking.
 - **Cursor harness**: `CURSOR_NUDGE=1 swift test --package-path
   Packages/QuartzOutput --filter CursorNudgeHarnessTests` physically nudges
   the pointer 10 pt and restores it, verifying the posting path end to end
