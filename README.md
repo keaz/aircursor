@@ -19,16 +19,41 @@ deterministic core. Only `HandTrackingKit` (AVFoundation, Vision),
 effects; `MotionFilters`, `GestureEngine`, and `PointerControl` are
 unit-testable value-type logic.
 
-## Gestures (v1)
+## Using AirCursor
 
-| Gesture | Action |
-| --- | --- |
-| Thumb–index pinch (hold) | Engage the clutch: relative cursor movement, like a trackpad |
-| Release pinch | Disengage — reposition your hand freely |
-| Quick pinch–release | Left click |
-| Pinch, hold, move | Drag |
-| Thumb–middle pinch tap | Right click |
-| Thumb–middle pinch, hold, move vertically | Scroll |
+Sit at a comfortable distance from the camera (roughly arm's length) with
+your hand raised, palm toward the screen. Start tracking from the menu bar
+icon. The icon shows state: slashed hand = missing permissions, outline =
+paused, filled = tracking.
+
+| Gesture | How | Result |
+| --- | --- | --- |
+| **Move** | Pinch thumb + index finger, move your hand, release to reposition | Cursor moves while pinched, like a finger on a trackpad — release and re-pinch to cover long distances |
+| **Left click** | Quick thumb–index pinch tap — fast and still | Click wherever the cursor is |
+| **Drag** | Pinch, hold still for a beat (~¼ s), then move | The button presses when you hold, drags as you move, releases when you release |
+| **Right click** | Quick thumb–middle pinch tap | Context menu |
+| **Scroll** | Thumb–middle pinch, hold (or start moving), then move vertically | Trackpad-style pixel scrolling; release to stop |
+
+Two behaviors worth knowing:
+
+- **Moving cancels clicking.** A pinch that travels commits to cursor
+  movement — it will never click or start a drag on release. To drag, pinch
+  and *hold still* first; to click, tap without moving.
+- **Losing tracking is safe.** If your hand leaves the frame mid-drag, the
+  button releases within ~100 ms. A stuck drag is impossible by design.
+
+### Settings
+
+Menu bar icon → **Settings…** (⌘,): pointer sensitivity, tap duration, and
+individual on/off toggles for left click, drag, right click, and scroll.
+Changes apply immediately. Pointer movement itself is always available.
+
+### Debug overlay
+
+Menu bar icon → **Debug Overlay…** shows the camera preview with landmark
+dots, frame rate, live gesture state, and the pinch metric. **Record
+Fixture** captures the landmark stream (JSON, never video) — useful for
+tuning thresholds against your real hand and for engine test fixtures.
 
 ## Requirements
 
@@ -67,6 +92,31 @@ swift test --package-path Packages/QuartzOutput      # CGEvent posting
 ```
 
 The Xcode project is generated — edit `project.yml`, never the `.xcodeproj`.
+
+## Development notes
+
+- **Fixtures** in `Fixtures/` are synthetic landmark recordings driving the
+  GestureEngine tests. Regenerate after changing the generator:
+  `REGENERATE_FIXTURES=1 swift test --package-path Packages/HandTrackingKit --filter FixtureGenerationTests`
+- **ReplaySource** plays fixtures back as a live-like frame stream for
+  camera-free development; `FrameRecorder` (and the overlay's Record button)
+  captures new ones.
+- **Cursor harness**: `CURSOR_NUDGE=1 swift test --package-path
+  Packages/QuartzOutput --filter CursorNudgeHarnessTests` physically nudges
+  the pointer 10 pt and restores it, verifying the posting path end to end
+  (requires the test host to be accessibility-trusted).
+
+## Troubleshooting
+
+- **Cursor doesn't move, but landmarks track** — Accessibility permission is
+  missing or was invalidated by a rebuild (ad-hoc signing changes the code
+  signature). Remove and re-add AirCursor in System Settings → Privacy &
+  Security → Accessibility, or set `DEVELOPMENT_TEAM` for a stable identity.
+- **Choppy tracking** — most built-in cameras top out at 30 fps; the overlay
+  shows the real rate. Good, even lighting improves Vision's confidence.
+- **Gestures trigger accidentally** — lower the tap duration, or disable
+  individual gestures in Settings; keep your other fingers relaxed and apart
+  so pinch metrics stay unambiguous.
 
 ## Privacy
 
