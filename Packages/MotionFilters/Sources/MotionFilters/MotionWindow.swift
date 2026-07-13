@@ -1,11 +1,16 @@
 import CoreGraphics
 import Foundation
 
-/// A rolling time window of positions that reports how far the point has
-/// actually travelled from where it was at the start of the window
-/// (net displacement, not jittery path length). Used to distinguish a moving
-/// hand from a static one — a mis-tracked background "hand" or a held-still
-/// press barely moves, while a real gesture travels.
+/// A rolling time window of positions that reports the spatial *extent* of
+/// the point's movement — the diagonal of the bounding box it covered over
+/// the window. Used to distinguish a moving hand from a static one: a
+/// mis-tracked background "hand" or a held-still press stays in a tiny box,
+/// while a real gesture — including a back-and-forth drag that returns near
+/// its start — sweeps a large box.
+///
+/// Extent, not net (endpoint) displacement: an oscillating drag has ~zero
+/// net displacement yet is clearly moving. Extent, not path length: jitter
+/// inflates path length, so a static hand would look busy.
 public struct MotionWindow: Sendable {
     private var samples: [(point: CGPoint, time: TimeInterval)] = []
     /// How far back the window reaches.
@@ -24,11 +29,18 @@ public struct MotionWindow: Sendable {
         }
     }
 
-    /// Distance from the oldest in-window sample to the newest. Oscillating
-    /// jitter returns near zero; sustained travel returns the real distance.
-    public var netDisplacement: Double {
-        guard let oldest = samples.first, let newest = samples.last else { return 0 }
-        return hypot(newest.point.x - oldest.point.x, newest.point.y - oldest.point.y)
+    /// Diagonal of the axis-aligned bounding box of the in-window samples.
+    /// Small for jitter or a held-still point; large for any real sweep,
+    /// oscillating or one-way.
+    public var boundingExtent: Double {
+        guard let first = samples.first else { return 0 }
+        var minX = first.point.x, maxX = first.point.x
+        var minY = first.point.y, maxY = first.point.y
+        for sample in samples.dropFirst() {
+            minX = min(minX, sample.point.x); maxX = max(maxX, sample.point.x)
+            minY = min(minY, sample.point.y); maxY = max(maxY, sample.point.y)
+        }
+        return hypot(maxX - minX, maxY - minY)
     }
 
     public mutating func reset() {

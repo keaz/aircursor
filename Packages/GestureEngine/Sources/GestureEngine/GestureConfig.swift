@@ -57,14 +57,17 @@ public struct GestureConfig: Equatable, Sendable {
     /// Hard backstop: a press held longer than this is force-released, so a
     /// mis-tracked sustained "pinch" can never stick the button down.
     public var maxPressDuration: TimeInterval
-    /// Behavioral demotion: a press whose movement joint travels less than
-    /// `stalePressMinTravel` over a window this long is released. A real drag
-    /// moves and a real click is brief, so only a static held button (the
-    /// signature of a mis-tracked background hand, or an accidental hold)
-    /// trips it. This needs no way to identify the phantom — measurement
-    /// showed no frame-local signal can — only that the press isn't moving.
+    /// Behavioral demotion: a press whose movement joint stays inside a box
+    /// smaller than `stalePressMinTravel` across a window this long is
+    /// released. A real drag — even a back-and-forth one — sweeps a wide box
+    /// and a real click is brief, so only a held-still button (the signature
+    /// of a mis-tracked background hand, or an accidental hold) trips it.
+    /// This needs no way to identify the phantom — measurement showed no
+    /// frame-local signal can — only that the press isn't sweeping.
     public var stalePressWindow: TimeInterval
-    /// Movement-joint net displacement below which a press counts as static.
+    /// Bounding-box diagonal (movement-joint) below which a press is static.
+    /// Measured separation: phantom holds cover ≤ ~0.055, real movement ≥
+    /// ~0.085, so 0.05 catches phantom holds without touching real drags.
     public var stalePressMinTravel: Double
     /// Minimum pinch-metric change per frame that counts as zoom activity.
     /// A spread (rising) or a return stroke (falling) both move the metric;
@@ -147,7 +150,7 @@ public struct GestureConfig: Equatable, Sendable {
         zoomIdleTimeout: TimeInterval = 1.2,
         maxPressDuration: TimeInterval = 8.0,
         stalePressWindow: TimeInterval = 2.0,
-        stalePressMinTravel: Double = 0.03,
+        stalePressMinTravel: Double = 0.05,
         zoomActivityEpsilon: Double = 0.04,
         zoomSpreadStart: Double = 1.0,
         zoomStepInterval: Double = 0.15,

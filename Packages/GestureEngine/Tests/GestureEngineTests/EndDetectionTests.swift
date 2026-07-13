@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 import GestureEngine
 import HandPoseCore
 import XCTest
@@ -176,6 +177,21 @@ final class EndDetectionTests: XCTestCase {
             )
         }
         XCTAssertEqual(harness.engine.state, .pressed(.left), "a moving drag must not be demoted")
+        XCTAssertEqual(harness.intents.releaseCount(.left), 0)
+    }
+
+    func testOscillatingDragIsNotDemoted() {
+        // A back-and-forth drag (scrubbing/sketching) returns near its start,
+        // so its net displacement is ~0 — but it sweeps a wide box and is
+        // clearly moving. It must survive the stale-press watchdog.
+        var harness = EngineHarness()
+        harness.point(frames: 3)
+        harness.feed(fingers: .init(index: true), indexPinch: 0.2, frames: 4) // press
+        for i in 0..<90 { // 3s at 30fps, past the 2s window
+            let x = 0.5 + 0.06 * sin(Double(i) * .pi / 8) // sweep ±0.06
+            harness.feed(fingers: .init(index: true), indexPinch: 0.2, center: CGPoint(x: x, y: 0.55))
+        }
+        XCTAssertEqual(harness.engine.state, .pressed(.left), "an oscillating drag is moving, not stuck")
         XCTAssertEqual(harness.intents.releaseCount(.left), 0)
     }
 

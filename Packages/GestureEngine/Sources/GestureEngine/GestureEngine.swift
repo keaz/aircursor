@@ -211,9 +211,10 @@ public struct GestureEngine: Sendable {
             pinchActionBlocked = true
             return .pointing
         case .pressed where timestamp - pressEntryTime >= config.stalePressWindow
-            && movementWindow.netDisplacement < config.stalePressMinTravel:
-            // Held static for the whole window: a real drag moves and a real
-            // click is brief, so this is a stuck/phantom press — demote it.
+            && movementWindow.boundingExtent < config.stalePressMinTravel:
+            // The movement joint has stayed inside a tiny box for the whole
+            // window — not a real drag (which sweeps a box, even back and
+            // forth) nor a brief click, so this is a stuck/phantom press.
             pinchActionBlocked = true
             return .pointing
         default:
