@@ -46,6 +46,8 @@ public struct PointerMapper: Sendable {
     /// Whether a scroll-wheel phase sequence is open (began emitted, no
     /// ended yet).
     private var scrollInProgress = false
+    /// Where an unengaged press landed, so its release lands there too.
+    private var unengagedPressPositions: [PointerButton: CGPoint] = [:]
 
     public var isEngaged: Bool { virtualPosition != nil }
 
@@ -91,21 +93,24 @@ public struct PointerMapper: Sendable {
             virtualPosition = position
             return [.move(to: position)]
 
-        case .click(let button):
-            // A right tap arrives without engagement; press wherever the
-            // cursor actually is.
-            let position = virtualPosition ?? currentPointerLocation()
-            return [.buttonDown(button, at: position), .buttonUp(button, at: position)]
+        case .pressed(let button):
+            // A two-finger right tap arrives without engagement; press
+            // wherever the cursor actually is and remember the spot.
+            if let position = virtualPosition {
+                return [.buttonDown(button, at: position)]
+            }
+            let position = currentPointerLocation()
+            unengagedPressPositions[button] = position
+            return [.buttonDown(button, at: position)]
 
-        case .dragBegan:
-            let position = virtualPosition ?? currentPointerLocation()
-            return [.buttonDown(.left, at: position)]
+        case .released(let button):
+            let position = virtualPosition
+                ?? unengagedPressPositions.removeValue(forKey: button)
+                ?? currentPointerLocation()
+            return [.buttonUp(button, at: position)]
 
-        case .dragEnded:
-            // Defensive fallback: a dragEnded must always release the button,
-            // even if intent ordering were ever violated upstream.
-            let position = virtualPosition ?? currentPointerLocation()
-            return [.buttonUp(.left, at: position)]
+        case .system(let action):
+            return [.system(action)]
 
         case .scrollBy(let dx, let dy):
             let phase: ScrollPhase = scrollInProgress ? .changed : .began

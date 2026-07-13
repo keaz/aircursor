@@ -1,4 +1,4 @@
-public enum PointerButton: Equatable, Sendable {
+public enum PointerButton: Equatable, Hashable, Sendable {
     case left
     case right
 }

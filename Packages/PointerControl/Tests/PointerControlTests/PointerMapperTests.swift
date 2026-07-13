@@ -198,61 +198,51 @@ final class PointerMapperTests: XCTestCase {
         XCTAssertEqual(mapper.displayConfigurationChanged([mainDisplay]), [])
     }
 
-    // MARK: - Clicks and drags (M3)
+    // MARK: - Presses (v2: the pinch is the button)
 
-    func testClickWhileEngagedPressesAndReleasesAtVirtualPosition() {
+    func testPressAndReleaseAtTheVirtualPositionWhileEngaged() {
         var mapper = makeLinearMapper(anchoredAt: CGPoint(x: 500, y: 300))
         _ = mapper.commands(for: .engaged, at: 0)
         _ = mapper.commands(for: .moveBy(dx: 0.01, dy: 0), at: dt)
 
         let position = CGPoint(x: 500 + 0.01 * 2000, y: 300)
         XCTAssertEqual(
-            mapper.commands(for: .click(.left), at: 2 * dt),
-            [.buttonDown(.left, at: position), .buttonUp(.left, at: position)]
+            mapper.commands(for: .pressed(.left), at: 2 * dt),
+            [.buttonDown(.left, at: position)]
         )
-        XCTAssertTrue(mapper.isEngaged, "a click must not break the clutch")
+
+        let moved = movePoint(mapper.commands(for: .moveBy(dx: 0.02, dy: 0), at: 3 * dt))
+        XCTAssertEqual(moved!.x, position.x + 0.02 * 2000, accuracy: 1e-9, "drag moves keep flowing")
+
+        XCTAssertEqual(
+            mapper.commands(for: .released(.left), at: 4 * dt),
+            [.buttonUp(.left, at: CGPoint(x: position.x + 0.02 * 2000, y: 300))]
+        )
+        XCTAssertTrue(mapper.isEngaged, "a press pair must not break the clutch")
     }
 
-    func testRightClickWhileDisengagedUsesCurrentCursorLocation() {
-        // A right tap never engages the clutch, so the mapper must ask the
-        // OS where the cursor actually is.
+    func testRightTapWhileDisengagedUsesCurrentCursorLocation() {
+        // A two-finger tap never engages the clutch, so the mapper must ask
+        // the OS where the cursor actually is.
         var mapper = makeLinearMapper(anchoredAt: CGPoint(x: 700, y: 400))
         XCTAssertEqual(
-            mapper.commands(for: .click(.right), at: 0),
-            [
-                .buttonDown(.right, at: CGPoint(x: 700, y: 400)),
-                .buttonUp(.right, at: CGPoint(x: 700, y: 400)),
-            ]
+            mapper.commands(for: .pressed(.right), at: 0),
+            [.buttonDown(.right, at: CGPoint(x: 700, y: 400))]
+        )
+        XCTAssertEqual(
+            mapper.commands(for: .released(.right), at: dt),
+            [.buttonUp(.right, at: CGPoint(x: 700, y: 400))]
         )
         XCTAssertFalse(mapper.isEngaged)
     }
 
-    func testDragPressesOnBeginMovesAndReleasesOnEnd() {
-        var mapper = makeLinearMapper(anchoredAt: CGPoint(x: 100, y: 100))
-        _ = mapper.commands(for: .engaged, at: 0)
+    // MARK: - System actions pass through
 
-        XCTAssertEqual(
-            mapper.commands(for: .dragBegan, at: dt),
-            [.buttonDown(.left, at: CGPoint(x: 100, y: 100))]
-        )
-
-        let moved = movePoint(mapper.commands(for: .moveBy(dx: 0.02, dy: 0), at: 2 * dt))
-        XCTAssertEqual(moved!.x, 100 + 0.02 * 2000, accuracy: 1e-9)
-
-        XCTAssertEqual(
-            mapper.commands(for: .dragEnded, at: 3 * dt),
-            [.buttonUp(.left, at: CGPoint(x: 100 + 0.02 * 2000, y: 100))]
-        )
-    }
-
-    func testDragEndedWhileDisengagedStillReleasesTheButton() {
-        // Defensive: even if intent order is ever violated upstream, a
-        // dragEnded must always produce a button-up somewhere.
-        var mapper = makeLinearMapper(anchoredAt: CGPoint(x: 250, y: 250))
-        XCTAssertEqual(
-            mapper.commands(for: .dragEnded, at: 0),
-            [.buttonUp(.left, at: CGPoint(x: 250, y: 250))]
-        )
+    func testSystemActionsPassThroughUntouched() {
+        var mapper = makeLinearMapper()
+        XCTAssertEqual(mapper.commands(for: .system(.spaceLeft), at: 0), [.system(.spaceLeft)])
+        XCTAssertEqual(mapper.commands(for: .system(.missionControl), at: dt), [.system(.missionControl)])
+        XCTAssertEqual(mapper.commands(for: .system(.zoomStepIn), at: 2 * dt), [.system(.zoomStepIn)])
     }
 
     // MARK: - Scroll (M4)

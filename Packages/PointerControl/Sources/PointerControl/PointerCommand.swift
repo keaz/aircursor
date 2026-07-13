@@ -14,6 +14,8 @@ public enum PointerCommand: Equatable, Sendable {
     case buttonDown(PointerButton, at: CGPoint)
     case buttonUp(PointerButton, at: CGPoint)
     case scroll(dx: Double, dy: Double, phase: ScrollPhase)
+    /// Discrete system gesture; QuartzOutput owns the key-chord mapping.
+    case system(SystemAction)
 }
 
 public protocol PointerOutput: Sendable {
