@@ -56,6 +56,11 @@ public struct GestureEngine: Sendable {
     private var scrollOrigin: CGPoint = .zero
     private var scrollTravel: Double = 0
     private var scrollCommitted = false
+    /// Whether this scroll sequence actually emitted a `scrollBy`. The scroll
+    /// phase is closed with `scrollEnded` iff this is true — independent of
+    /// the live `scrollEnabled` flag, so disabling scrolling mid-stroke still
+    /// closes an open phase and never fabricates one that never opened.
+    private var scrollEmittedDelta = false
 
     // Zoom ratchet bookkeeping.
     private var zoomNextStepRatio = 0.0
@@ -290,6 +295,7 @@ public struct GestureEngine: Sendable {
             scrollOrigin = movementPoint
             scrollTravel = 0
             scrollCommitted = false
+            scrollEmittedDelta = false
         case .zooming:
             zoomNextStepRatio = config.zoomSpreadStart + config.zoomStepInterval
             zoomExitStreak = 0
@@ -318,8 +324,9 @@ public struct GestureEngine: Sendable {
     private mutating func scrollExitIntents(
         at timestamp: TimeInterval, exitPose: HandPose
     ) -> [PointerIntent] {
-        if scrollCommitted {
-            return config.scrollEnabled ? [.scrollEnded] : []
+        if scrollEmittedDelta {
+            // A phase was opened; close it regardless of the live flag.
+            return [.scrollEnded]
         }
         let dwell = timestamp - scrollEntryTime
         let isTap = config.rightButtonEnabled
@@ -367,6 +374,7 @@ public struct GestureEngine: Sendable {
             guard config.scrollEnabled,
                   let delta, delta.dx != 0 || delta.dy != 0
             else { return [] }
+            scrollEmittedDelta = true
             return [.scrollBy(dx: delta.dx, dy: delta.dy)]
 
         case .zooming:
@@ -423,7 +431,7 @@ public struct GestureEngine: Sendable {
         case .pointing:
             intents.append(.disengaged)
         case .scrolling:
-            if scrollCommitted && config.scrollEnabled {
+            if scrollEmittedDelta {
                 intents.append(.scrollEnded)
             }
         case .idle, .neutral, .palm, .zooming:
@@ -438,6 +446,7 @@ public struct GestureEngine: Sendable {
         lastSnapshot = nil
         scrollTravel = 0
         scrollCommitted = false
+        scrollEmittedDelta = false
         zoomExitStreak = 0
         poseDebouncer.reset()
         pinchActionBlocked = false

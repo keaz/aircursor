@@ -178,6 +178,46 @@ final class GestureEngineTransitionTests: XCTestCase {
         XCTAssertLessThan(endIndex, engageIndex, "scroll phase closes before re-engaging")
     }
 
+    private func scrollStroke(_ harness: inout EngineHarness, frames: Int) {
+        for i in 0..<frames {
+            harness.feed(
+                fingers: .init(index: true, middle: true),
+                center: CGPoint(x: 0.5, y: 0.55 - Double(i) * 0.01)
+            )
+        }
+    }
+
+    func testDisablingScrollMidStrokeStillClosesThePhase() {
+        var harness = EngineHarness()
+        harness.point(frames: 2)
+        scrollStroke(&harness, frames: 8)
+        XCTAssertGreaterThanOrEqual(harness.intents.scrollCount, 1, "the stroke committed")
+
+        // Disable scrolling mid-stroke, then keep the pose a beat and exit.
+        harness.engine.config.scrollEnabled = false
+        harness.feed(fingers: .init(index: true, middle: true), frames: 2)
+        harness.point(frames: 2)
+
+        XCTAssertEqual(
+            harness.intents.count(of: .scrollEnded), 1,
+            "a committed scroll must close its phase even after scrolling is disabled"
+        )
+    }
+
+    func testDisablingScrollBeforeAnyDeltaEmitsNoEnd() {
+        var harness = EngineHarness()
+        harness.point(frames: 2)
+        harness.engine.config.scrollEnabled = false
+        scrollStroke(&harness, frames: 10)
+        harness.point(frames: 2)
+
+        XCTAssertEqual(harness.intents.scrollCount, 0)
+        XCTAssertEqual(
+            harness.intents.count(of: .scrollEnded), 0,
+            "no scroll command was emitted, so there is no phase to end"
+        )
+    }
+
     func testTwoFingerTapRightClicks() {
         var harness = EngineHarness()
         harness.point(frames: 3)
