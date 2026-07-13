@@ -16,3 +16,6 @@ xcuserdata/
 
 # Raw gesture videos stay local — the repo carries landmark JSON only
 docs/gesture recording/
+
+# Raw screen recordings stay local — landmark JSON only
+docs/*.mov
