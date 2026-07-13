@@ -13,6 +13,8 @@ let package = Package(
         .library(name: "HandPoseCore", targets: ["HandPoseCore"]),
         // AVFoundation + Vision live camera source. App-target consumption only.
         .library(name: "HandTrackingKit", targets: ["HandTrackingKit"]),
+        // Offline dev tool: extract landmark fixtures from gesture videos.
+        .executable(name: "fixture-extract", targets: ["FixtureExtract"]),
     ],
     targets: [
         .target(
@@ -22,6 +24,11 @@ let package = Package(
         .target(
             name: "HandTrackingKit",
             dependencies: ["HandPoseCore"],
+            swiftSettings: strictConcurrency
+        ),
+        .executableTarget(
+            name: "FixtureExtract",
+            dependencies: ["HandTrackingKit", "HandPoseCore"],
             swiftSettings: strictConcurrency
         ),
         .testTarget(

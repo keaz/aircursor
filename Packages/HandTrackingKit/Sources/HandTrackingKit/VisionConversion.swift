@@ -3,15 +3,17 @@ import HandPoseCore
 import Vision
 
 /// Converts Vision hand-pose observations into `HandPoseFrame` space.
-enum VisionConversion {
+/// Public so the offline `fixture-extract` tool shares the exact conversion
+/// the live camera source uses.
+public enum VisionConversion {
     /// Vision points are normalized with a bottom-left origin and unmirrored;
     /// `HandPoseFrame` space is top-left origin and mirrored horizontally so
     /// moving the hand right increases x. Both axes flip.
-    static func handSpacePoint(fromVision point: CGPoint) -> CGPoint {
+    public static func handSpacePoint(fromVision point: CGPoint) -> CGPoint {
         CGPoint(x: 1 - point.x, y: 1 - point.y)
     }
 
-    static func handJoint(for name: VNHumanHandPoseObservation.JointName) -> HandJoint? {
+    public static func handJoint(for name: VNHumanHandPoseObservation.JointName) -> HandJoint? {
         switch name {
         case .wrist: return .wrist
         case .thumbCMC: return .thumbCMC
@@ -40,7 +42,7 @@ enum VisionConversion {
 
     /// Builds a frame from an observation, dropping joints below
     /// `minimumConfidence`.
-    static func frame(
+    public static func frame(
         from observation: VNHumanHandPoseObservation,
         timestamp: TimeInterval,
         minimumConfidence: Float

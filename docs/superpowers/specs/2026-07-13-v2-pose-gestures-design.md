@@ -1,7 +1,38 @@
 # v2 Gesture Vocabulary — "Invisible Trackpad"
 
-**Date:** 2026-07-13 · **Status:** approved (design), pending spec review
+**Date:** 2026-07-13 · **Status:** approved; revised same day against the
+user's recorded gestures (`Fixtures/recorded/`, extracted from videos with
+`fixture-extract` — landmarks only, raw video stays out of the repo).
 **Supersedes:** the v1 pinch-clutch gesture set (M0–M4), user-directed revision.
+
+## Revision: evidence from real recordings
+
+Seven real gesture recordings (~30 fps, 100% hand detection) calibrated the
+design and forced three changes:
+
+1. **Presses are entry-gated.** During scroll-stroke returns the relaxed
+   index dips to thumb–index ratios below 0.35 (29 frames across the two
+   scroll videos) — an ungated pinch would phantom-click mid-scroll. A pinch
+   therefore only presses the left button when it closes **from the Point
+   pose**; pinches formed from Neutral arm **zoom** instead, and pinches
+   formed during Scroll/returns do nothing.
+2. **Thumb–middle right-click is dead.** While pointing, the curled middle
+   finger rests at thumb–middle ratio 0.16–0.34 — permanently "closed".
+   Right-click is now a **two-finger tap**: enter and leave the Scroll pose
+   within ≤ 0.25 s with < 0.02 scroll travel. (Right-drag is dropped.)
+3. **The extras are in scope** (user recorded them): open-palm swipe
+   left/right → **switch Spaces** (ctrl+←/→); fist-to-open **bloom** →
+   **Mission Control** (ctrl+↑); Neutral-armed pinch **spread** →
+   **zoom in** (⌘+ ratchet steps; re-close re-arms; zoom-out deferred).
+
+Calibration from the recordings: extended fingers read 1.3–1.5, curled
+0.4–0.8 → extension hysteresis extend > 1.15 / retract < 0.95 sits in the
+gap; Scroll-pose purity holds (ring/little read extended ≤ 1 frame during
+strokes); pointing never false-pinches (min ratio 0.45 across 216 frames);
+blooms complete within ~1 frame (≤ 0.13 s window, wrist drift < 0.05);
+zoom spreads peak 1.43–1.65 (arm at close, step per +0.15 above 1.0);
+swipe strokes peak ~2.0 units/s with ≥ 0.09 displacement (detector: first
+qualifying stroke after palm-open wins; 0.6 s cooldown swallows returns).
 
 ## Goal
 
@@ -76,6 +107,13 @@ Fixture tests enforce it.
 ## Intent contract (v2)
 
 ```swift
+public enum SystemAction: Equatable, Sendable {
+    case spaceLeft      // swipe left  → ctrl+←
+    case spaceRight     // swipe right → ctrl+→
+    case missionControl // bloom       → ctrl+↑
+    case zoomStepIn     // pinch spread → ⌘+ (one step per ratchet increment)
+}
+
 public enum PointerIntent: Equatable, Sendable {
     case engaged
     case moveBy(dx: Double, dy: Double)
@@ -84,13 +122,18 @@ public enum PointerIntent: Equatable, Sendable {
     case released(PointerButton)  // replaces dragEnded
     case scrollBy(dx: Double, dy: Double)
     case scrollEnded
+    case system(SystemAction)     // discrete system gestures
 }
 ```
 
-`click`, `dragBegan`, `dragEnded` are removed. PointerControl maps
+`click`, `dragBegan`, `dragEnded` are removed. Two-finger-tap right-click
+emits a `pressed(.right)`/`released(.right)` pair. PointerControl maps
 `pressed`/`released` to `buttonDown`/`buttonUp` at the engaged virtual
-position (or the live cursor position when unengaged). `PointerCommand`
-and `PointerOutput` are unchanged.
+position (or the live cursor position when unengaged) and passes
+`system(_:)` through as a new `PointerCommand.system(SystemAction)`;
+QuartzOutput owns the key-chord mapping and posts keyDown/keyUp pairs to
+the HID tap. Recorded fixtures double as cross-contamination tests: every
+recording asserts zero intents of every other gesture family.
 
 ## QuartzOutput: click coalescing (new)
 
