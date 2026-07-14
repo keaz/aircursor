@@ -33,13 +33,7 @@ public final class CameraHandPoseSource: NSObject, HandPoseSource, @unchecked Se
     private let targetFrameRate: Double
     private let handPoseRequest: VNDetectHumanHandPoseRequest
     private let requestAuthorization: @Sendable () async -> Bool
-    private let regionTracking: Bool
-    private let regionInflateFactor: Double
     private var configured = false
-
-    /// ROI track-following state, confined to `videoQueue`. Starts full-frame
-    /// and follows the last detected hand; resets to full frame on a loss.
-    private var currentROI = HandRegionOfInterest.full
 
     /// Explicit lifecycle, confined to `sessionQueue`. `stop()` is terminal
     /// for a source instance — once stopped, the session can never start.
@@ -53,17 +47,10 @@ public final class CameraHandPoseSource: NSObject, HandPoseSource, @unchecked Se
 
     public var frames: AsyncStream<HandPoseFrame> { stream }
 
-    public convenience init(
-        minimumJointConfidence: Float = 0.3,
-        targetFrameRate: Double = 60,
-        regionTracking: Bool = true,
-        regionInflateFactor: Double = 2.5
-    ) {
+    public convenience init(minimumJointConfidence: Float = 0.3, targetFrameRate: Double = 60) {
         self.init(
             minimumJointConfidence: minimumJointConfidence,
             targetFrameRate: targetFrameRate,
-            regionTracking: regionTracking,
-            regionInflateFactor: regionInflateFactor,
             requestAuthorization: { await CameraPermission.requestAccess() }
         )
     }
@@ -73,14 +60,10 @@ public final class CameraHandPoseSource: NSObject, HandPoseSource, @unchecked Se
     init(
         minimumJointConfidence: Float,
         targetFrameRate: Double,
-        regionTracking: Bool = true,
-        regionInflateFactor: Double = 2.5,
         requestAuthorization: @escaping @Sendable () async -> Bool
     ) {
         self.minimumJointConfidence = minimumJointConfidence
         self.targetFrameRate = targetFrameRate
-        self.regionTracking = regionTracking
-        self.regionInflateFactor = regionInflateFactor
         self.requestAuthorization = requestAuthorization
         let request = VNDetectHumanHandPoseRequest()
         request.maximumHandCount = 1
@@ -202,11 +185,6 @@ extension CameraHandPoseSource: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let timestamp = sampleBuffer.presentationTimeStamp.seconds
 
-        // Constrain the search to the region around the last hand so the
-        // detector follows it instead of re-scanning the whole frame, where
-        // a cluttered background can win. Reset to full frame on a loss.
-        handPoseRequest.regionOfInterest = regionTracking ? currentROI : HandRegionOfInterest.full
-
         // Synchronous perform: combined with alwaysDiscardsLateVideoFrames,
         // inference time longer than a frame interval drops frames instead of
         // queueing stale ones.
@@ -224,20 +202,8 @@ extension CameraHandPoseSource: AVCaptureVideoDataOutputSampleBufferDelegate {
                 timestamp: timestamp,
                 minimumConfidence: minimumJointConfidence
             )
-            if regionTracking {
-                // Results stay in full-image coordinates despite the ROI, so
-                // the next region is the inflated box of the raw Vision
-                // points (before the hand-space flip).
-                let points = (try? observation.recognizedPoints(.all).values
-                    .filter { $0.confidence >= minimumJointConfidence }
-                    .map(\.location)) ?? []
-                currentROI = HandRegionOfInterest.next(
-                    fromNormalizedPoints: points, inflateBy: regionInflateFactor
-                )
-            }
         } else {
             frame = HandPoseFrame(joints: [:], timestamp: timestamp)
-            currentROI = HandRegionOfInterest.full
         }
         continuation.yield(frame)
     }
