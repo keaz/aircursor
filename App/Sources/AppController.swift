@@ -4,6 +4,7 @@ import HandPoseCore
 import HandTrackingKit
 import MotionFilters
 import Observation
+import os
 import PointerControl
 import QuartzOutput
 import SwiftUI
@@ -45,6 +46,10 @@ final class AppController {
     private(set) var latestFrame: HandPoseFrame?
     /// Measured delivery rate of hand-pose frames.
     private(set) var framesPerSecond: Double = 0
+    /// Inter-frame gap distribution over the last 5 s, for the debug HUD:
+    /// the engine's debounce thresholds are frame counts, so the *delivered*
+    /// rate and its stability decide what those thresholds mean in seconds.
+    private(set) var frameTiming: FrameTimingStatistics.Snapshot?
     /// Engine state and index-pinch metric, for the debug overlay HUD.
     private(set) var gestureStateLabel = "idle"
     private(set) var indexPinchMetric: Double?
@@ -52,7 +57,9 @@ final class AppController {
     private var source: CameraHandPoseSource?
     private var consumeTask: Task<Void, Never>?
     private var permissionPolling: Task<Void, Never>?
-    private var fpsEstimator = FrameRateEstimator()
+    private var timingStats = FrameTimingStatistics()
+    private var lastTimingLog: TimeInterval = 0
+    private static let timingLogger = Logger(subsystem: "AirCursor", category: "timing")
 
     // Pipeline stages.
     private let output = QuartzPointerOutput()
@@ -174,7 +181,9 @@ final class AppController {
         self.source = source
         isTracking = true
         lastError = nil
-        fpsEstimator = FrameRateEstimator()
+        timingStats = FrameTimingStatistics()
+        frameTiming = nil
+        lastTimingLog = 0
         engine = GestureEngine()
         mapper = makeMapper()
         resetMovementFilter()
@@ -216,6 +225,7 @@ final class AppController {
         isTracking = false
         latestFrame = nil
         framesPerSecond = 0
+        frameTiming = nil
         gestureStateLabel = "idle"
         indexPinchMetric = nil
         mapper = nil
@@ -224,7 +234,11 @@ final class AppController {
 
     private func ingest(_ frame: HandPoseFrame) async {
         latestFrame = frame
-        framesPerSecond = fpsEstimator.record(frame.timestamp)
+        timingStats.record(frame.timestamp)
+        let timing = timingStats.snapshot()
+        frameTiming = timing
+        framesPerSecond = timing?.framesPerSecond ?? 0
+        logTimingPeriodically(timing, at: frame.timestamp)
 
         // Frames are fed only once the recorder has acknowledged begin (the
         // session token is set), so nothing is recorded before the buffer is
@@ -244,6 +258,25 @@ final class AppController {
 
         gestureStateLabel = Self.label(for: engine.state)
         indexPinchMetric = engine.lastSnapshot?.indexPinchMetric
+    }
+
+    /// One unified-log line every ~5 s so a normal session records the real
+    /// delivered rate. Read it with:
+    /// `log show --predicate 'subsystem == "AirCursor"' --last 10m`.
+    private func logTimingPeriodically(
+        _ timing: FrameTimingStatistics.Snapshot?, at timestamp: TimeInterval
+    ) {
+        guard let timing, timestamp - lastTimingLog >= 5 else { return }
+        lastTimingLog = timestamp
+        Self.timingLogger.notice(
+            """
+            delivered \(timing.framesPerSecond, format: .fixed(precision: 1), privacy: .public) fps · \
+            gap p50 \(timing.medianGap * 1000, format: .fixed(precision: 1), privacy: .public) ms \
+            p95 \(timing.p95Gap * 1000, format: .fixed(precision: 1), privacy: .public) ms \
+            max \(timing.maxGap * 1000, format: .fixed(precision: 1), privacy: .public) ms · \
+            \(timing.longGapCount, privacy: .public) long gaps in \(timing.frameCount, privacy: .public) frames
+            """
+        )
     }
 
     private func fail(_ error: Error) {

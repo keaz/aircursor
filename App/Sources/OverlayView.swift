@@ -70,11 +70,8 @@ struct OverlayView: View {
 
     private var hud: some View {
         HStack(spacing: 16) {
-            Label(
-                String(format: "%.0f fps", controller.framesPerSecond),
-                systemImage: "speedometer"
-            )
-            .monospacedDigit()
+            Label(frameTimingText, systemImage: "speedometer")
+                .monospacedDigit()
 
             Label(
                 handStatus,
@@ -95,6 +92,21 @@ struct OverlayView: View {
     private var pinchMetricText: String {
         guard let metric = controller.indexPinchMetric else { return "pinch —" }
         return String(format: "pinch %.2f", metric)
+    }
+
+    /// Delivered rate plus gap stability — the numbers that tell whether the
+    /// engine's frame-count thresholds mean what the recordings assumed.
+    private var frameTimingText: String {
+        guard let timing = controller.frameTiming else {
+            return String(format: "%.0f fps", controller.framesPerSecond)
+        }
+        return String(
+            format: "%.0f fps · gap %.0f/%.0f ms · %d drops",
+            timing.framesPerSecond,
+            timing.medianGap * 1000,
+            timing.p95Gap * 1000,
+            timing.longGapCount
+        )
     }
 
     private var handDetected: Bool {
