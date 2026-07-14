@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreMedia
 import HandPoseCore
+import os
 import Vision
 
 /// Live hand tracking: AVCaptureSession frames → synchronous Vision hand-pose
@@ -117,11 +118,14 @@ public final class CameraHandPoseSource: NSObject, HandPoseSource, @unchecked Se
     private func configureIfNeeded() throws {
         guard !configured else { return }
 
+        Self.applyStableFramingPolicy()
+
         guard let device = AVCaptureDevice.default(
             .builtInWideAngleCamera, for: .video, position: .unspecified
         ) ?? AVCaptureDevice.default(for: .video) else {
             throw HandTrackingError.noCameraAvailable
         }
+        warnAboutUserControlledVideoEffects(on: device)
 
         captureSession.beginConfiguration()
         defer { captureSession.commitConfiguration() }
@@ -151,6 +155,42 @@ public final class CameraHandPoseSource: NSObject, HandPoseSource, @unchecked Se
         try configureFrameRate(on: device)
         configured = true
     }
+
+    /// OS framing effects (Center Stage on Continuity Camera / Studio
+    /// Display) auto-pan and re-crop the image to keep a subject centred.
+    /// Landmarks are normalized to the *cropped* frame, so every OS pan reads
+    /// as hand motion downstream. Take app control of Center Stage and keep
+    /// it off for this process. Class-level policy — idempotent, no device
+    /// lock needed; the control mode must be `.app` before the enable flag
+    /// may be written.
+    static func applyStableFramingPolicy() {
+        AVCaptureDevice.centerStageControlMode = .app
+        AVCaptureDevice.isCenterStageEnabled = false
+    }
+
+    /// Effects only the user can toggle (Control Center → Video Effects /
+    /// Reactions). They distort the image or fire overlays on hand gestures —
+    /// actively hostile to a hand tracker — so surface them loudly in the log.
+    private func warnAboutUserControlledVideoEffects(on device: AVCaptureDevice) {
+        if device.isPortraitEffectActive {
+            Self.logger.warning(
+                """
+                Portrait effect is active on \(device.localizedName, privacy: .public); \
+                background blur degrades hand landmarks. Disable it in Control Center → Video Effects.
+                """
+            )
+        }
+        if device.canPerformReactionEffects, AVCaptureDevice.reactionEffectGesturesEnabled {
+            Self.logger.warning(
+                """
+                Camera reaction gestures are enabled; hand gestures (thumbs-up, etc.) will fire \
+                on-video effects mid-tracking. Disable Reactions in Control Center.
+                """
+            )
+        }
+    }
+
+    private static let logger = Logger(subsystem: "AirCursor", category: "camera")
 
     /// Requests `targetFrameRate`, clamped to the active format's maximum
     /// (built-in cameras often top out at 30 fps).
