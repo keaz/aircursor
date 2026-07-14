@@ -14,17 +14,22 @@ public struct PipelineConfig: Equatable, Sendable {
     public var palmCropScale: Double
     /// Previous-landmarks bbox → next crop enlargement while following.
     public var trackCropScale: Double
+    /// Source image aspect ratio (width / height). Crops are squared in pixels
+    /// using this so the model-square resize is undistorted; 1.0 = square.
+    public var imageAspect: Double
 
     public init(
         palmScoreThreshold: Double = 0.5,
         landmarkPresenceThreshold: Double = 0.5,
         palmCropScale: Double = 2.6,
-        trackCropScale: Double = 1.8
+        trackCropScale: Double = 1.8,
+        imageAspect: Double = 1.0
     ) {
         self.palmScoreThreshold = palmScoreThreshold
         self.landmarkPresenceThreshold = landmarkPresenceThreshold
         self.palmCropScale = palmCropScale
         self.trackCropScale = trackCropScale
+        self.imageAspect = imageAspect
     }
 }
 
@@ -66,7 +71,7 @@ public struct HandTrackingPipeline<Model: HandDetectionModel>: @unchecked Sendab
                 else {
                     return lost(timestamp)
                 }
-                currentCrop = HandCropGeometry.squareCrop(around: palm.box, scale: config.palmCropScale)
+                currentCrop = HandCropGeometry.squareCrop(around: palm.box, scale: config.palmCropScale, aspect: config.imageAspect)
             } catch {
                 lastError = error
                 return lost(timestamp)
@@ -88,7 +93,7 @@ public struct HandTrackingPipeline<Model: HandDetectionModel>: @unchecked Sendab
             // Re-crop from these landmarks for the next frame — the palm
             // detector is skipped while the track holds.
             if let bbox = HandCropGeometry.boundingBox(of: imagePoints) {
-                currentCrop = HandCropGeometry.squareCrop(around: bbox, scale: config.trackCropScale)
+                currentCrop = HandCropGeometry.squareCrop(around: bbox, scale: config.trackCropScale, aspect: config.imageAspect)
             }
             isTracking = true
             return MediaPipeLandmarks.frame(

@@ -22,6 +22,27 @@ final class HandCropGeometryTests: XCTestCase {
         XCTAssertLessThanOrEqual(crop.maxY, 1.0 + 1e-9)
     }
 
+    func testSquareCropIsPixelSquareForWideAspect() {
+        // 16:9 image. A crop that is square in pixels must be NARROWER than tall
+        // in normalized space (normalized width = normalized height / aspect),
+        // and width·W == height·H.
+        let aspect = 1280.0 / 720.0
+        let box = CGRect(x: 0.45, y: 0.4, width: 0.06, height: 0.1) // centre (0.48, 0.45)
+        let crop = HandCropGeometry.squareCrop(around: box, scale: 2.0, aspect: aspect)
+        // Pixel extents equal: width·1280 == height·720.
+        XCTAssertEqual(crop.width * 1280, crop.height * 720, accuracy: 1e-6)
+        XCTAssertLessThan(crop.width, crop.height) // narrower than tall for 16:9
+        XCTAssertEqual(crop.midX, 0.48, accuracy: 1e-9)
+        XCTAssertEqual(crop.midY, 0.45, accuracy: 1e-9)
+    }
+
+    func testSquareCropAspectOneMatchesLegacySquare() {
+        let box = CGRect(x: 0.4, y: 0.4, width: 0.2, height: 0.1)
+        let square = HandCropGeometry.squareCrop(around: box, scale: 2.0) // default aspect 1
+        XCTAssertEqual(square.width, square.height, accuracy: 1e-12)
+        XCTAssertEqual(square.width, 0.4, accuracy: 1e-9)
+    }
+
     func testBoundingBoxOfPoints() throws {
         let box = try XCTUnwrap(HandCropGeometry.boundingBox(of: [
             CGPoint(x: 0.2, y: 0.3), CGPoint(x: 0.6, y: 0.1), CGPoint(x: 0.4, y: 0.5),

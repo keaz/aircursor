@@ -3,20 +3,28 @@ import CoreGraphics
 /// Pure geometry for the crop the landmark model runs on, in image-normalized
 /// coordinates (top-left origin, unit square).
 ///
-/// v1 works entirely in normalized space with a plain linear crop→model
-/// resize (the inverse below assumes that). Aspect-preserving padding to the
-/// model's square input is an O2 refinement; a mild aspect stretch is
-/// tolerated by the landmark model.
+/// The crop is square in **pixels** (equal real extent per axis), not in
+/// normalized space, so resizing it to the model's square input is a uniform
+/// scale with no aspect distortion — measured to matter: a 16:9 camera's
+/// normalized-square crop stretches the hand ~1.8× and the landmark model
+/// loses confidence. The crop→image inverse below is per-axis linear, so it
+/// stays correct for the resulting non-square (in normalized space) rect.
 public enum HandCropGeometry {
-    /// A square (in normalized space) crop centred on `box`, enlarged by
-    /// `scale` and clamped inside the unit square. Enlarged because the
-    /// landmark model expects the hand with margin (MediaPipe uses ~2.6× the
-    /// palm box).
-    public static func squareCrop(around box: CGRect, scale: Double) -> CGRect {
-        let side = min(1.0, max(box.width, box.height, 1e-4) * scale)
-        let x = min(max(0, box.midX - side / 2), 1 - side)
-        let y = min(max(0, box.midY - side / 2), 1 - side)
-        return CGRect(x: x, y: y, width: side, height: side)
+    /// A crop centred on `box`, square in pixels for an image of the given
+    /// `aspect` (imageWidth / imageHeight), enlarged by `scale` and clamped
+    /// inside the unit square. Enlarged because the landmark model expects the
+    /// hand with margin (MediaPipe uses ~2.6× the palm box). `aspect == 1`
+    /// reduces to a plain normalized square.
+    public static func squareCrop(around box: CGRect, scale: Double, aspect: Double = 1.0) -> CGRect {
+        // Work in vertical-normalized units. The pixel-square side, expressed as
+        // a fraction of image height, is max(box.width·aspect, box.height)·scale;
+        // clamp so neither normalized dimension exceeds 1 (widthNorm = sideH/aspect).
+        let sideH = min(min(1.0, aspect), max(box.width * aspect, box.height, 1e-4) * scale)
+        let heightNorm = sideH
+        let widthNorm = sideH / aspect
+        let x = min(max(0, box.midX - widthNorm / 2), 1 - widthNorm)
+        let y = min(max(0, box.midY - heightNorm / 2), 1 - heightNorm)
+        return CGRect(x: x, y: y, width: widthNorm, height: heightNorm)
     }
 
     /// The bounding box of `points`, or nil if empty. Used to re-crop from the
