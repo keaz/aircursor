@@ -18,8 +18,10 @@ let package = Package(
     dependencies: [
         // Shares the HandPoseFrame / HandPoseSource contracts.
         .package(path: "../HandTrackingKit"),
-        // ONNX Runtime is added in O2 (needs the model files first):
-        // .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager", from: "1.19.0"),
+        .package(
+            url: "https://github.com/microsoft/onnxruntime-swift-package-manager",
+            exact: "1.19.2"
+        ),
     ],
     targets: [
         .target(
@@ -34,7 +36,7 @@ let package = Package(
             dependencies: [
                 "HandLandmarkPipeline",
                 .product(name: "HandPoseCore", package: "HandTrackingKit"),
-                // .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
+                .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
             ],
             resources: [
                 // MediaPipe-origin ONNX models (OpenCV Zoo, Apache-2.0). See
@@ -47,6 +49,11 @@ let package = Package(
         .testTarget(
             name: "HandLandmarkPipelineTests",
             dependencies: ["HandLandmarkPipeline"],
+            swiftSettings: strictConcurrency
+        ),
+        .testTarget(
+            name: "OnnxHandTrackingTests",
+            dependencies: ["OnnxHandTracking"],
             swiftSettings: strictConcurrency
         ),
     ]
