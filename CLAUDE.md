@@ -7,6 +7,11 @@
   (AVFoundation, Vision) and QuartzOutput (CGEvent) and the App target.
   MotionFilters, GestureEngine, PointerControl must not import them.
 - No third-party dependencies in any package without explicit approval.
+  Exception (approved 2026-07-14, branch `feature/onnx-hand-tracking` only):
+  ONNX Runtime + MediaPipe-origin ONNX models, to replace Vision's hand
+  tracking. Confined to the new `OnnxHandTracking` package behind the
+  `HandPoseSource` seam; nothing else changes. See
+  docs/superpowers/specs/2026-07-14-onnx-hand-tracking-design.md.
 - Strict concurrency: treat Sendable/data-race warnings as errors to fix.
 - Never write camera frames or images to disk; fixtures are landmark JSON only.
 - Never add entitlements, change Info.plist permission strings, or alter the
