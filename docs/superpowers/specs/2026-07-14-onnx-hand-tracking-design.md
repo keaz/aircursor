@@ -77,11 +77,36 @@ The `.onnx` weights are **not** committed and must be sourced deliberately:
 - **O2 (needs model files):** implement the ONNX tensor I/O against the real
   model specs (input shapes, output tensor names, palm SSD-anchor decode);
   wire `OnnxHandPoseSource`.
-- **O3 (validation gate):** run the new source over the committed recordings
-  and compare to Vision's numbers — detection %, flicker rate (Vision:
-  24/100 ROI, 1/100 full-frame), and whether the palm score separates the
-  real hand from the background phantom. Adopt only if it beats Vision.
-- **O4:** app wiring (menu toggle Vision ↔ ONNX), README, tuning.
+- **O2 — DONE:** ONNX tensor I/O implemented against the real model specs.
+  Palm `Identity`=2016×18 regression + `Identity_1`=2016 scores; hand
+  `Identity`=63 screen landmarks + `Identity_1`=presence (verified by loading
+  the files). `PixelPreprocessor` (CVPixelBuffer → NHWC RGB float32) pinned by
+  a two-tone orientation/channel test. 38 package tests green.
+- **O3 (validation gate) — DONE. VERDICT: DO NOT ADOPT.** A scratch harness
+  (`scratchpad/onnxvalidate`) ran `HandTrackingPipeline<OnnxHandLandmarkModel>`
+  over the 7 ground-truth gesture clips + the problem screen recording, vs
+  Vision `RecordedSession` baselines on the same clips. Findings:
+  - Pixel-square crops were essential (74–100%→96–100% on 5/7 clips); the
+    stretch/letterbox variants both flickered badly. Kept as the real fix.
+  - **Vision ≥ ONNX on every clip.** Clean clips: Vision 100%/0 everywhere;
+    ONNX 100%/0 on 5/7 but flickers on the two fast swipes (swipe-left
+    86%/16.4, swipe-right 95%/7.5). Vision holds ~100%/≤1 even there.
+  - **The phantom-rejection premise is refuted.** Per-frame agreement on the
+    problem clip: 878/900 agree, incl. 276 both-none frames — Vision does NOT
+    over-detect when there is no hand. Disagreements are ONNX *missing* hands
+    Vision catches (Vision-only 21 vs ONNX-only 1; swipe-left Vision-only 24 vs
+    ONNX-only 0). Vision's binary detect gate already separates hand/no-hand as
+    well as ONNX's graded palm score, and agrees with it.
+  - ONNX also costs ~2× per frame (two model inferences).
+  Conclusion: the graded-presence advantage that motivated the swap does not
+  materialise on real footage, and ONNX regresses fast-motion stability. The
+  user's original "recognition broken" complaint was the ROI change (reverted
+  in f1ba984, main = full-frame Vision), which this data shows is already the
+  strong baseline. **Recommend not wiring ONNX into the app (skip O4);** keep
+  the branch as a well-tested spike in case rotation-aware MediaPipe landmarks
+  or a graded gate are needed for a future scenario this footage doesn't cover.
+- **O4 — NOT PURSUED** (see O3 verdict). Would be: app wiring (menu toggle
+  Vision ↔ ONNX), README, tuning — only if a future need overturns the gate.
 
 ## Risks
 
